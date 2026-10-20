@@ -30,10 +30,10 @@
 ### Tasks
 
 #### 0.1 Repository Initialization
-- [ ] Create GitHub repository `yatra-ai`
-- [ ] Initialize with `.gitignore` (Python template + custom exclusions)
-- [ ] Add MIT `LICENSE`
-- [ ] Create initial `README.md` with project title and one-line description
+- [x] Create GitHub repository `yatra-ai`
+- [x] Initialize with `.gitignore` (Python template + custom exclusions)
+- [x] Add MIT `LICENSE`
+- [x] Create initial `README.md` with project title and one-line description
 
 #### 0.2 Directory Structure Creation
 ```
@@ -78,8 +78,8 @@ yatra-ai/
 ```
 
 #### 0.3 Virtual Environment & Dependencies
-- [ ] Create virtualenv: `python -m venv .venv`
-- [ ] Create `requirements.txt`:
+- [x] Create virtualenv: `python -m venv .venv`
+- [x] Create `requirements.txt`:
   ```
   # Core framework
   langchain>=0.3.0
@@ -111,11 +111,11 @@ yatra-ai/
   # Date handling
   python-dateutil>=2.9.0
   ```
-- [ ] Install: `pip install -r requirements.txt`
-- [ ] Create `setup.py` for editable install: `pip install -e .`
+- [x] Install: `pip install -r requirements.txt`
+- [x] Create `setup.py` for editable install: `pip install -e .`
 
 #### 0.4 Environment Configuration
-- [ ] Create `.env.example`:
+- [x] Create `.env.example`:
   ```bash
   # Required API Keys
   OPENAI_API_KEY=sk-your-openai-key
@@ -128,17 +128,17 @@ yatra-ai/
   MCP_CONFIG_PATH=yatra_agent/config/servers_config.json
   CHROMA_PERSIST_DIR=./data/travel_vectordb
   ```
-- [ ] Create `.env` from `.env.example` with real keys
+- [x] Create `.env` from `.env.example` with real keys
 
 #### 0.5 Hello World Streamlit App
-- [ ] Create minimal `app.py`:
+- [x] Create minimal `app.py`:
   ```python
   import streamlit as st
   st.set_page_config(page_title="Yatra AI", page_icon="🌍")
   st.title("🌍 Yatra AI — Intelligent Travel Planner")
   st.write("System is loading...")
   ```
-- [ ] Verify: `streamlit run app.py` opens in browser
+- [x] Verify: `streamlit run app.py` opens in browser
 
 ### Definition of Done (Phase 0)
 - ✅ `streamlit run app.py` shows the title page
