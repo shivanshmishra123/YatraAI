@@ -1,0 +1,43 @@
+{
+  "mcp_servers": [
+    {
+      "name": "IRCTC Server",
+      "url": "http://localhost:8001/sse",
+      "timeout": 120,
+      "required": true,
+      "description": "Indian Railways train search, availability, schedules, and fares"
+    },
+    {
+      "name": "Google Maps Server",
+      "url": "http://localhost:8002/sse",
+      "timeout": 30,
+      "required": true,
+      "description": "Directions, driving duration, fuel/toll costs, and hotel search"
+    },
+    {
+      "name": "Weather Server",
+      "url": "http://localhost:8003/sse",
+      "timeout": 30,
+      "required": true,
+      "description": "Weather forecasts, rain probability, and weather alerts"
+    },
+    {
+      "name": "Flight Server",
+      "url": "http://localhost:8004/sse",
+      "timeout": 30,
+      "required": false,
+      "description": "Domestic flight search and fare comparisons"
+    },
+    {
+      "name": "Bus Server",
+      "url": "http://localhost:8005/sse",
+      "timeout": 30,
+      "required": false,
+      "description": "Intercity bus schedules, types, and ticket prices"
+    }
+  ],
+  "agent": {
+    "name": "YatraAI",
+    "instructions": "You are Yatra AI, a professional Indian travel planning assistant. You help users plan domestic trips across India by querying trains (IRCTC), driving routes (Google Maps), hotels, weather forecasts, domestic flights, and intercity buses. Generate detailed, budget-conscious travel plans with day-wise itineraries."
+  }
+}
