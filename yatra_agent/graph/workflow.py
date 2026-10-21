@@ -42,6 +42,8 @@ def build_travel_workflow():
     workflow.add_node("simple_query", nodes.simple_query_node)
     workflow.add_node("missing_info", missing_info_adapter_node)
     workflow.add_node("planning_ready", nodes.planning_ready_node)
+    workflow.add_node("react_agent_execution", nodes.react_agent_execution_node)
+    workflow.add_node("synthesizer", nodes.synthesizer_node)
 
     # 2. Sequential Edges
     workflow.set_entry_point("extract_info")
@@ -58,10 +60,12 @@ def build_travel_workflow():
         },
     )
 
-    # 4. Terminal Edges for Phase 1
+    # 4. Phase 3 Planning Pipeline Edges
+    workflow.add_edge("planning_ready", "react_agent_execution")
+    workflow.add_edge("react_agent_execution", "synthesizer")
+    workflow.add_edge("synthesizer", END)
     workflow.add_edge("simple_query", END)
     workflow.add_edge("missing_info", END)
-    workflow.add_edge("planning_ready", END)
 
     # 5. Compile with in-memory checkpointer for multi-turn state persistence
     checkpointer = MemorySaver()

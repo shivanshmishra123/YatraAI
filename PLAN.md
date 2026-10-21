@@ -265,9 +265,9 @@ yatra-ai/
 ### Tasks
 
 #### 2.1 RAG Tool Implementation (`rag_tool.py`)
-- [ ] Initialize ChromaDB client with persistent storage
-- [ ] Configure OpenAI `text-embedding-3-small` embeddings
-- [ ] Implement `TravelRAGTool` class:
+- [x] Initialize ChromaDB client with persistent storage
+- [x] Configure OpenAI `text-embedding-3-small` embeddings
+- [x] Implement `TravelRAGTool` class:
   ```python
   class TravelRAGTool:
       def __init__(self, persist_dir: str = "./data/travel_vectordb")
@@ -276,32 +276,32 @@ yatra-ai/
       def get_stats(self) -> dict
       def delete_by_source(self, source: str)
   ```
-- [ ] Document loaders for `.txt`, `.md`, `.pdf`, `.csv`
-- [ ] Chunking with `RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)`
-- [ ] UUID generation: `MD5(f"{source}:{index}:{content[:100]}")`
-- [ ] Deduplication on import
+- [x] Document loaders for `.txt`, `.md`, `.pdf`, `.csv`
+- [x] Chunking with `RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)`
+- [x] UUID generation: `MD5(f"{source}:{index}:{content[:100]}")`
+- [x] Deduplication on import
 
 #### 2.2 Seed Knowledge Base
-- [ ] Create 10-15 seed travel guide documents covering:
+- [x] Create 10-15 seed travel guide documents covering:
   - Top 10 Indian destinations (Jaipur, Goa, Kerala, Varanasi, Manali, Udaipur, Rishikesh, Hampi, Andaman, Darjeeling)
   - Budget travel tips for India
   - Indian railway classes explained
   - Monsoon travel guide
   - Temple etiquette guide
   - Street food safety tips
-- [ ] Each document: 500-2000 words, markdown format
-- [ ] Import into ChromaDB
+- [x] Each document: 500-2000 words, markdown format
+- [x] Import into ChromaDB
 
 #### 2.3 RAG Integration into Chat Pipeline
-- [ ] For **simple queries**: search RAG → inject top results into GPT-4o-mini context → generate enriched answer
-- [ ] For **full planning**: search RAG for destination guide → add to state as `rag_results` → use in synthesis
-- [ ] Show RAG source attribution in responses: "Based on our travel guide for Jaipur..."
+- [x] For **simple queries**: search RAG → inject top results into GPT-4o-mini context → generate enriched answer
+- [x] For **full planning**: search RAG for destination guide → add to state as `rag_results` → use in synthesis
+- [x] Show RAG source attribution in responses: "Based on our travel guide for Jaipur..."
 
 #### 2.4 Knowledge Base Management UI (Sidebar)
-- [ ] File upload widget in Streamlit sidebar
-- [ ] Show upload progress
-- [ ] Display knowledge base stats (total docs, sources)
-- [ ] Refresh/rebuild button
+- [x] File upload widget in Streamlit sidebar
+- [x] Show upload progress
+- [x] Display knowledge base stats (total docs, sources)
+- [x] Refresh/rebuild button
 
 ### Definition of Done (Phase 2)
 - ✅ "What are the best places in Jaipur?" returns a rich, knowledge-enhanced answer
@@ -320,7 +320,7 @@ yatra-ai/
 ### Tasks
 
 #### 3.1 MCP Tool Manager (`mcp_tools.py`)
-- [ ] Implement `MCPToolManager` class:
+- [x] Implement `MCPToolManager` class:
   ```python
   class MCPToolManager:
       def __init__(self, config_path: str)
@@ -330,76 +330,76 @@ yatra-ai/
       def get_available_tools(self) -> list[ToolDefinition]
       async def health_check(self) -> dict[str, bool]
   ```
-- [ ] SSE connection with keep-alive
-- [ ] Auto-retry: 2 retries on failure, exponential backoff (1s, 3s)
-- [ ] Timeout: 120s for IRCTC, 30s for others
-- [ ] Connection pooling (reuse SSE connections across calls)
-- [ ] Error isolation: one server failure doesn't affect others
+- [x] SSE connection with keep-alive
+- [x] Auto-retry: 2 retries on failure, exponential backoff (1s, 3s)
+- [x] Timeout: 120s for IRCTC, 30s for others
+- [x] Connection pooling (reuse SSE connections across calls)
+- [x] Error isolation: one server failure doesn't affect others
 
 #### 3.2 Tool Registry & LangChain Adapter (`tool_registry.py`)
-- [ ] Define all tool schemas as `ToolDefinition` objects
-- [ ] Convert MCP tools into LangChain `StructuredTool` / `BaseTool` instances
-- [ ] Register tools for the LangChain Agent with typing and descriptions
+- [x] Define all tool schemas as `ToolDefinition` objects
+- [x] Convert MCP tools into LangChain `StructuredTool` / `BaseTool` instances
+- [x] Register tools for the LangChain Agent with typing and descriptions
 
 #### 3.3 IRCTC Train Server Integration
-- [ ] Connect to IRCTC MCP server
-- [ ] Implement station code resolution: city → station code(s)
+- [x] Connect to IRCTC MCP server
+- [x] Implement station code resolution: city → station code(s)
   - Build station code cache: `{"Delhi": ["NDLS", "DLI", "DEE", "ANVT"], "Mumbai": ["CSTM", "BCT", "LTT"], ...}`
-- [ ] Implement train search: date + stations → train list
-- [ ] Parse response: extract train number, name, departure, arrival, duration, classes, fares
-- [ ] Handle IRCTC timeouts gracefully (120s timeout, 2 retries)
-- [ ] Test with real queries: Delhi→Jaipur, Mumbai→Pune, Bangalore→Chennai
+- [x] Implement train search: date + stations → train list
+- [x] Parse response: extract train number, name, departure, arrival, duration, classes, fares
+- [x] Handle IRCTC timeouts gracefully (120s timeout, 2 retries)
+- [x] Test with real queries: Delhi→Jaipur, Mumbai→Pune, Bangalore→Chennai
 
 #### 3.4 Google Maps Server Integration
-- [ ] Connect to Google Maps MCP server
-- [ ] Implement driving directions: origin + destination → distance, time, route, tolls
+- [x] Connect to Google Maps MCP server
+- [x] Implement driving directions: origin + destination → distance, time, route, tolls
   - Calculate fuel cost: `distance_km / 15 * 100` (petrol) or `distance_km / 18 * 95` (diesel)
   - Add 1.3x time multiplier for non-NH routes
-- [ ] Implement hotel search: location + keyword + price range → hotel list
+- [x] Implement hotel search: location + keyword + price range → hotel list
   - Budget mapping: price → keyword ("5-star", "OYO", "hostel", "dharamshala")
-- [ ] Implement POI search: "tourist places in Jaipur" → list of attractions
-- [ ] Test with real queries
+- [x] Implement POI search: "tourist places in Jaipur" → list of attractions
+- [x] Test with real queries
 
 #### 3.5 Weather Server Integration
-- [ ] Connect to Weather MCP server (OpenWeatherMap or WeatherAPI based)
-- [ ] Implement forecast: city + days → daily weather
-- [ ] Add monsoon awareness: June-Sept flag
-- [ ] Add fog awareness: Nov-Jan for North India
-- [ ] Add heatwave awareness: April-June for most of India
-- [ ] Test with real queries
+- [x] Connect to Weather MCP server (OpenWeatherMap or WeatherAPI based)
+- [x] Implement forecast: city + days → daily weather
+- [x] Add monsoon awareness: June-Sept flag
+- [x] Add fog awareness: Nov-Jan for North India
+- [x] Add heatwave awareness: April-June for most of India
+- [x] Test with real queries
 
 #### 3.6 Flight Server Integration (Conditional)
-- [ ] Connect to Flight MCP server (Amadeus API based)
-- [ ] Implement flight search: origin IATA + dest IATA + date → flights
-- [ ] Build IATA code cache: `{"Delhi": "DEL", "Mumbai": "BOM", "Bangalore": "BLR", ...}`
-- [ ] Trigger condition: distance > 500km OR train time > 12h OR user requests
-- [ ] Test with: Delhi→Bangalore, Mumbai→Kolkata
+- [x] Connect to Flight MCP server (Amadeus API based)
+- [x] Implement flight search: origin IATA + dest IATA + date → flights
+- [x] Build IATA code cache: `{"Delhi": "DEL", "Mumbai": "BOM", "Bangalore": "BLR", ...}`
+- [x] Trigger condition: distance > 500km OR train time > 12h OR user requests
+- [x] Test with: Delhi→Bangalore, Mumbai→Kolkata
 
 #### 3.7 Bus Server Integration (Conditional)
-- [ ] Connect to Bus MCP server (RedBus API based)
-- [ ] Implement bus search: from + to + date → bus list
-- [ ] Only trigger for known bus-friendly routes
-- [ ] Test with: Delhi→Jaipur, Bangalore→Goa
+- [x] Connect to Bus MCP server (RedBus API based)
+- [x] Implement bus search: from + to + date → bus list
+- [x] Only trigger for known bus-friendly routes
+- [x] Test with: Delhi→Jaipur, Bangalore→Goa
 
 #### 3.8 LangChain ReAct Agent Assembly (`agent_executor.py`)
-- [ ] Create LangChain ReAct Agent using `create_react_agent` with GPT-4o-mini
-- [ ] Bind all 5 MCP LangChain tools + RAG retrieval tool
-- [ ] System prompt: comprehensive planner persona with Indian domestic context
-- [ ] Streamlit callback handler for streaming intermediate thoughts & tool actions
+- [x] Create LangChain ReAct Agent using `create_react_agent` with GPT-4o-mini
+- [x] Bind all 5 MCP LangChain tools + RAG retrieval tool
+- [x] System prompt: comprehensive planner persona with Indian domestic context
+- [x] Streamlit callback handler for streaming intermediate thoughts & tool actions
 
 #### 3.9 LangGraph StateGraph Assembly (`workflow.py`)
-- [ ] Define `StateGraph(TravelPlanState)`
-- [ ] Register nodes: `extract_info`, `pre_analyze`, `simple_query`, `gemini_strategy`, `react_agent_execution`, `critique_validator`, `synthesizer`
-- [ ] Define conditional routing edges:
+- [x] Define `StateGraph(TravelPlanState)`
+- [x] Register nodes: `extract_info`, `pre_analyze`, `simple_query`, `gemini_strategy`, `react_agent_execution`, `critique_validator`, `synthesizer`
+- [x] Define conditional routing edges:
   - Complexity router (`simple_query` vs `gemini_strategy` vs `react_agent_execution`)
   - Validation cycle router (re-plan loop with iteration guardrail ≤ 2)
-- [ ] Add `MemorySaver` checkpointer for stateful multi-turn persistence
-- [ ] Compile workflow to callable graph instance
+- [x] Add `MemorySaver` checkpointer for stateful multi-turn persistence
+- [x] Compile workflow to callable graph instance
 
 #### 3.10 Health Check Script (`check_mcp_health.py`)
-- [ ] Script that tests connectivity to all 5 MCP servers
-- [ ] Reports: server name, status (✅/❌), tool count, latency
-- [ ] Runnable: `python check_mcp_health.py`
+- [x] Script that tests connectivity to all 5 MCP servers
+- [x] Reports: server name, status (✅/❌), tool count, latency
+- [x] Runnable: `python check_mcp_health.py`
 
 ### Definition of Done (Phase 3)
 - ✅ "Plan Delhi to Jaipur, 3 days, ₹8000, Dec 15" → queries trains, driving, hotels, weather, buses

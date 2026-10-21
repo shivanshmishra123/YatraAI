@@ -55,15 +55,14 @@ def _fallback_extract_info(text: str) -> Dict[str, Any]:
     }
 
     t_lower = text.lower().strip()
-
-    t_clean = t_lower
+    t_clean = re.sub(r"[?!.,;:]", " ", t_lower).strip()
 
     # 1. Check explicit "from <origin> to <dest>" or "<origin> to <dest>" or "<origin> se <dest>"
     # Pattern A: "from X to Y" or "from X -> Y"
     from_to_match = re.search(r"\bfrom\s+([a-z\s]+?)\s+(?:to|->)\s+([a-z\s,]+?)(?=\s+(?:for|in|on|with|starting|\d)|\s*$)", t_clean)
     if not from_to_match:
         # Pattern B: "X to Y" or "X -> Y" (where X and Y are cities, e.g. "Delhi to Jaipur")
-        from_to_match = re.search(r"(?:^|plan\s+(?:a\s+)?trip\s+)?([a-z\s]+?)\s+(?:to|->)\s+([a-z\s,]+?)(?=\s+(?:for|in|on|with|starting|\d)|\s*$)", t_clean)
+        from_to_match = re.search(r"(?:^|plan\s+(?:a\s+)?(?:trip\s+)?(?:from\s+)?)([a-z\s]+?)\s+(?:to|->)\s+([a-z\s,]+?)(?=\s+(?:for|in|on|with|starting|\d)|\s*$)", t_clean)
     
     # Pattern C: Hindi "X se Y (jaana)"
     se_match = re.search(r"([a-z\s]+?)\s+se\s+([a-z\s,]+?)(?:\s+jaana|\s+ko|\s+for|\s+in|\s*$|\d)", t_clean)
@@ -75,7 +74,7 @@ def _fallback_extract_info(text: str) -> Dict[str, Any]:
         cand_orig = from_to_match.group(1).strip()
         cand_dest = from_to_match.group(2).strip()
         # Clean leading words like "trip", "plan", "kal"
-        cand_orig = re.sub(r"^(?:plan\s+(?:a\s+)?trip\s+(?:from\s+)?|trip\s+(?:from\s+)?|from\s+|kal\s+|aaj\s+)", "", cand_orig).strip()
+        cand_orig = re.sub(r"^(?:plan\s+(?:a\s+)?(?:trip\s+)?(?:from\s+)?|trip\s+(?:from\s+)?|from\s+|kal\s+|aaj\s+)", "", cand_orig).strip()
         cand_dest = re.sub(r"^(?:visit\s+)", "", cand_dest).strip()
         
         orig_res = resolve_city_name(cand_orig)
@@ -302,6 +301,25 @@ def simple_query_node(state: TravelPlanState) -> TravelPlanState:
             user_message = m.get("content", "")
             break
 
+    # 1. Search TravelRAGTool for destination knowledge
+    rag_docs = []
+    rag_context = ""
+    sources = []
+    try:
+        from yatra_agent.tools.rag_tool import TravelRAGTool
+        rag = TravelRAGTool()
+        search_term = user_message
+        if state.get("destinations"):
+            search_term = f"{' '.join(state['destinations'])} {user_message}"
+        rag_docs = rag.search(search_term, top_k=3)
+        if rag_docs:
+            state["rag_results"] = [d.page_content for d in rag_docs]
+            context_pieces = [f"--- Source: {d.metadata.get('source', 'Guide')} ---\n{d.page_content}" for d in rag_docs]
+            rag_context = "\n\n".join(context_pieces)
+            sources = list(dict.fromkeys(d.metadata.get("source", "knowledge_base") for d in rag_docs if d.metadata))
+    except Exception as e:
+        logger.warning(f"RAG search error in simple_query_node: {e}")
+
     openai_key = os.getenv("OPENAI_API_KEY")
     response_text = ""
 
@@ -312,29 +330,44 @@ def simple_query_node(state: TravelPlanState) -> TravelPlanState:
 
             prompt = SIMPLE_QUERY_PROMPT.format(
                 user_message=user_message,
-                rag_context="Knowledge base ready. Standard curated guidelines apply.",
+                rag_context=rag_context or "Standard curated guidelines apply.",
             )
 
             llm = ChatOpenAI(model=PRIMARY_MODEL, temperature=PRIMARY_MODEL_TEMPERATURE, api_key=openai_key)
             res = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=user_message)])
             response_text = res.content
+            if sources:
+                response_text += f"\n\n📚 *Based on our travel guide for {', '.join(sources)}*"
         except Exception as e:
             logger.warning(f"Simple query LLM call failed: {e}")
 
     if not response_text:
-        # High quality offline fallback response
+        # High quality knowledge-enhanced offline fallback response
         dests = state.get("destinations", [])
         place = dests[0] if dests else "your destination"
-        response_text = (
-            f"### 🌟 Exploring {place}\n\n"
-            f"Here are key travel insights for **{place}**:\n\n"
-            f"- **🏛️ Key Attractions**: Historic forts, vibrant local bazars, and iconic monuments.\n"
-            f"- **🍛 Food Specialties**: Don't miss the local street food and traditional delicacies!\n"
-            f"- **🕒 Best Visiting Time**: Early mornings and late afternoons are ideal for sightseeing.\n"
-            f"- **🚆 Connectivity**: Well connected via Indian Railways and National Highways.\n\n"
-            f"*To generate a full day-wise itinerary with real-time train availability, driving routes, "
-            f"and budget estimation, let me know your departure city and preferred travel dates!*"
-        )
+
+        if rag_docs:
+            top_doc = rag_docs[0]
+            src = top_doc.metadata.get("source", f"{place.lower()}_guide.md")
+            response_text = (
+                f"### 🌟 Exploring {place}\n\n"
+                f"{top_doc.page_content}\n\n"
+                f"📚 *Based on our travel guide for {src}*\n\n"
+                f"---\n"
+                f"💡 *To generate a full day-wise itinerary with real-time train availability, driving routes, "
+                f"and budget estimation, let me know your departure city and preferred travel dates!*"
+            )
+        else:
+            response_text = (
+                f"### 🌟 Exploring {place}\n\n"
+                f"Here are key travel insights for **{place}**:\n\n"
+                f"- **🏛️ Key Attractions**: Historic monuments, cultural landmarks, and local bazaars.\n"
+                f"- **🍛 Food Specialties**: Don't miss the local street food and traditional delicacies!\n"
+                f"- **🕒 Best Visiting Time**: Early mornings and late afternoons are ideal for sightseeing.\n"
+                f"- **🚆 Connectivity**: Well connected via Indian Railways and National Highways.\n\n"
+                f"*To generate a full day-wise itinerary with real-time train availability, driving routes, "
+                f"and budget estimation, let me know your departure city and preferred travel dates!*"
+            )
 
     # Append assistant response to messages
     state.setdefault("messages", []).append({"role": "assistant", "content": response_text})
@@ -444,8 +477,9 @@ def gemini_strategy_node(state: TravelPlanState) -> TravelPlanState:
 
 
 def react_agent_execution_node(state: TravelPlanState) -> TravelPlanState:
-    """Stub for Phase 3 MCP tool execution."""
-    return state
+    """Executes the LangChain ReAct agent and domestic tools to retrieve trains, routes, hotels, and weather."""
+    from yatra_agent.agent.agent_executor import execute_travel_planning_agent
+    return execute_travel_planning_agent(state)
 
 
 def critique_validator_node(state: TravelPlanState) -> TravelPlanState:
@@ -454,5 +488,137 @@ def critique_validator_node(state: TravelPlanState) -> TravelPlanState:
 
 
 def synthesizer_node(state: TravelPlanState) -> TravelPlanState:
-    """Stub for Phase 4 synthesizer."""
+    """Synthesizes structured travel data into a polished day-by-day itinerary with pricing in INR."""
+    origin = state.get("origin", "Delhi")
+    destinations = state.get("destinations", ["Jaipur"])
+    primary_dest = destinations[0] if destinations else "Jaipur"
+    date_str = state.get("departure_date", "15-12-2026")
+    days = state.get("num_days", 3) or 3
+    budget_val = state.get("budget", 0.0)
+    travelers = state.get("num_travelers", 1)
+
+    train_data = state.get("train_data", {})
+    driving_data = state.get("driving_data", {})
+    hotel_data = state.get("hotel_data", {})
+    weather_data = state.get("weather_data", {})
+    flight_data = state.get("flight_data", {})
+    bus_data = state.get("bus_data", {})
+
+    lines = [
+        f"# 🇮🇳 Complete Itinerary: {origin} to {', '.join(destinations)}",
+        f"**Dates**: {date_str} ({days} Days) | **Travelers**: {travelers} | **Budget**: {'₹' + f'{budget_val:,.0f}' if budget_val > 0 else 'Standard Recommendations'}\n",
+        "---",
+        "## 1. 🚆 Transport & Connectivity Options\n",
+    ]
+
+    # Train details
+    trains = train_data.get("trains", [])
+    if trains:
+        lines.append(f"### Indian Railways (IRCTC) — Recommended Trains:")
+        for t in trains[:3]:
+            classes_str = ", ".join([f"{c}: ₹{info['fare']} ({info['status']})" for c, info in t.get("classes", {}).items()])
+            lines.append(
+                f"- **{t['train_number']} {t['train_name']}** ({t['from_station']} ➔ {t['to_station']})\n"
+                f"  - Departure: `{t['departure']}` | Arrival: `{t['arrival']}` | Duration: `{t['duration']}` | Runs: {t.get('runs_on', 'Daily')}\n"
+                f"  - Class Fares & Live Status: {classes_str}"
+            )
+        lines.append("")
+
+    # Driving details
+    if driving_data.get("distance_km"):
+        fuel = driving_data.get("estimated_fuel_cost_inr", {})
+        routes = ", ".join(driving_data.get("recommended_routes", []))
+        lines.append(
+            f"### 🚗 Self-Drive / Taxi Option via {routes}:\n"
+            f"- **Distance**: {driving_data['distance_km']} km | **Driving Time**: ~{driving_data.get('driving_duration', '4h')}\n"
+            f"- **Estimated Fuel**: ₹{fuel.get('petrol', 0):,.0f} (Petrol) / ₹{fuel.get('diesel', 0):,.0f} (Diesel)\n"
+            f"- **FASTag Tolls**: ~₹{driving_data.get('estimated_toll_cost_inr', 0):,.0f}\n"
+            f"- **Advisory**: {driving_data.get('road_condition', 'Standard National Highway')}\n"
+        )
+
+    # Flights if applicable
+    if flight_data.get("flights"):
+        lines.append("### ✈️ Domestic Flight Option:")
+        for f in flight_data["flights"][:2]:
+            lines.append(f"- **{f['airline']} {f['flight_number']}** ({f['stops']}) — Dep: `{f['departure']}` | Arr: `{f['arrival']}` | Fare: **₹{f['fare_inr']:,}**")
+        lines.append("")
+
+    # Buses
+    if bus_data.get("buses"):
+        lines.append("### 🚌 Intercity Bus Option:")
+        for b in bus_data["buses"][:2]:
+            lines.append(f"- **{b['operator']}** ({b['bus_type']}) — Dep: `{b['departure']}` | Fare: **₹{b['fare_inr']:,}** | Boarding: {b['boarding_point']}")
+        lines.append("")
+
+    # Weather
+    if weather_data.get("temperature_range"):
+        alerts = " ".join(weather_data.get("travel_alerts", []))
+        lines.extend([
+            "---",
+            f"## 2. 🌤️ Weather Advisory for {primary_dest}\n",
+            f"- **Temperature**: {weather_data['temperature_range']} | **Condition**: {weather_data['condition']}\n",
+            f"- **Rain Probability**: {weather_data.get('precipitation_probability', '10%')} | **Humidity**: {weather_data.get('humidity', '55%')}\n",
+            f"- **Alerts**: {alerts if alerts else 'Favorable travel conditions.'}\n",
+        ])
+
+    # Hotels
+    hotels = hotel_data.get("hotels", [])
+    if hotels:
+        lines.extend([
+            "---",
+            f"## 3. 🏨 Recommended Accommodations ({primary_dest})\n",
+        ])
+        for h in hotels:
+            amenities = ", ".join(h.get("amenities", []))
+            lines.append(
+                f"- **{h['name']}** ({h.get('category', 'Hotel')})\n"
+                f"  - Nightly Rate: **₹{h['price_per_night']:,}** (Total {days} nights: ₹{h.get('total_cost_for_stay', 0):,})\n"
+                f"  - Rating: ⭐ {h['rating']}/5 | Location: {h['location']}\n"
+                f"  - Amenities: {amenities}"
+            )
+        lines.append("")
+
+    # Day by day itinerary
+    lines.extend([
+        "---",
+        f"## 4. 📅 Day-by-Day Sightseeing Itinerary ({days} Days)\n",
+    ])
+    for day_i in range(1, days + 1):
+        if day_i == 1:
+            lines.append(
+                f"### Day 1: Arrival, Heritage Landmarks & Sunset Views\n"
+                f"- **Morning (09:30 - 13:00)**: Arrival at {primary_dest}, check-in at hotel, refresh with authentic local breakfast.\n"
+                f"- **Afternoon (14:00 - 17:00)**: Explore the primary palace / fortress complex and museum galleries.\n"
+                f"- **Evening (17:30 - 20:30)**: Sunset viewing from the highest fortress viewpoint followed by a traditional dinner.\n"
+            )
+        elif day_i == 2:
+            lines.append(
+                f"### Day 2: Cultural Immersion, Local Bazaars & Traditional Dining\n"
+                f"- **Morning (08:30 - 12:30)**: Visit architectural wonders, stepwells, or sacred temple complexes.\n"
+                f"- **Afternoon (13:30 - 16:30)**: Walking tour through historic old-city alleys and handicraft bazaars.\n"
+                f"- **Evening (17:30 - 21:00)**: Traditional folk performance or aarti ceremony, followed by iconic regional specialties.\n"
+            )
+        else:
+            lines.append(
+                f"### Day {day_i}: Scenic Excursion & Souvenir Shopping\n"
+                f"- **Morning (09:00 - 13:00)**: Short excursion to nearby artisan villages, botanical gardens, or adventure lakes.\n"
+                f"- **Afternoon (14:00 - 16:30)**: Pick up souvenirs, local spices, and traditional sweets for family back home.\n"
+                f"- **Evening (17:00 onwards)**: Departure journey via scheduled train or highway return.\n"
+            )
+
+    # Local Knowledge & Attributions
+    rag_results = state.get("rag_results", [])
+    if rag_results:
+        lines.extend([
+            "---",
+            "## 5. 💡 Local Tips & Etiquette (from Yatra AI Knowledge Base)\n",
+            "- Dress respectfully when visiting temples and stepwells (cover shoulders and knees; footwear removal required).\n",
+            "- Always drink sealed packaged mineral water from reputed brands or verified RO counters.\n",
+            "- When booking IRCTC Tatkal tickets, note that AC Tatkal opens at 10:00 AM and Non-AC at 11:00 AM.\n",
+            f"📚 *Sources: Yatra AI Curated Knowledge Base ({primary_dest.lower()}_guide.md, indian_railways_classes.md)*\n",
+        ])
+
+    final_plan_text = "\n".join(lines)
+    state["final_plan"] = final_plan_text
+    state.setdefault("messages", []).append({"role": "assistant", "content": final_plan_text})
     return state

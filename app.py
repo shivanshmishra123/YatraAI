@@ -1,9 +1,12 @@
-"""Yatra AI — Streamlit Application Entrypoint."""
+"""Yatra AI — Intelligent Domestic Travel Planner with LangGraph, LangChain & ChromaDB RAG."""
 
 import os
+from pathlib import Path
 import streamlit as st
+
 from yatra_agent.graph.state import create_initial_state
 from yatra_agent.graph.workflow import build_travel_workflow
+from yatra_agent.tools.rag_tool import TravelRAGTool
 from yatra_agent.utils.date_parser import get_current_ist_datetime
 
 st.set_page_config(
@@ -13,36 +16,54 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for modern styling
+# Custom CSS for rich aesthetics
 st.markdown(
     """
     <style>
     .main-title {
-        font-size: 2.2rem;
+        font-size: 2.3rem;
         font-weight: 700;
         color: #ff6b35;
         margin-bottom: 0.1rem;
     }
     .sub-title {
         font-size: 1.0rem;
-        color: #666;
+        color: #555;
         margin-bottom: 1.2rem;
     }
-    .badge-phase1 {
+    .badge-phase {
         background-color: #e8f0fe;
         color: #1a73e8;
         padding: 3px 8px;
         border-radius: 4px;
         font-weight: 600;
-        font-size: 0.85rem;
+        font-size: 0.82rem;
+        margin-right: 4px;
     }
-    .param-box {
-        background-color: #f8f9fa;
-        border-left: 3px solid #ff6b35;
-        padding: 8px 12px;
-        margin-bottom: 8px;
-        border-radius: 2px;
-        font-size: 0.9rem;
+    .badge-rag {
+        background-color: #e6f4ea;
+        color: #137333;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 0.82rem;
+        margin-right: 4px;
+    }
+    .badge-mcp {
+        background-color: #fef7e0;
+        color: #b06000;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 0.82rem;
+    }
+    .data-pill {
+        display: inline-block;
+        background: #f1f3f4;
+        border-radius: 12px;
+        padding: 2px 10px;
+        margin: 2px;
+        font-size: 0.85rem;
     }
     </style>
     """,
@@ -54,7 +75,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Namaste! 🙏 I am **Yatra AI**, your Indian travel planning assistant. "
+            "content": "Namaste! 🙏 I am **Yatra AI**, your Indian domestic travel planner. "
                        "Where would you like to travel, or what destination can I help you explore today?",
         }
     ]
@@ -65,13 +86,16 @@ if "travel_state" not in st.session_state:
 if "workflow" not in st.session_state:
     st.session_state.workflow = build_travel_workflow()
 
+if "rag_tool" not in st.session_state:
+    st.session_state.rag_tool = TravelRAGTool()
+
 
 # Function to clear chat and reset state
 def reset_conversation():
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Namaste! 🙏 I am **Yatra AI**, your Indian travel planning assistant. "
+            "content": "Namaste! 🙏 I am **Yatra AI**, your Indian domestic travel planner. "
                        "Where would you like to travel, or what destination can I help you explore today?",
         }
     ]
@@ -80,7 +104,7 @@ def reset_conversation():
 
 
 # ---------------------------------------------------------------------------
-# Sidebar UI: State Inspector & Controls
+# Sidebar UI: State Inspector, RAG Manager & Controls
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.subheader("⚙️ Yatra AI Controls")
@@ -111,7 +135,57 @@ with st.sidebar:
     st.markdown(f"**Duration:** {days_display}")
     st.markdown(f"**Budget:** {budget_display}")
     st.markdown(f"**Travelers:** {travelers_display}")
-    st.markdown(f"**Mode:** `{mode_display}` ({deep_reasoning})")
+    st.markdown(f"**Routing Mode:** `{mode_display}` ({deep_reasoning})")
+
+    # Display live tool results if gathered
+    trains_count = len(ts.get("train_data", {}).get("trains", []))
+    driving_km = ts.get("driving_data", {}).get("distance_km", 0)
+    hotels_count = len(ts.get("hotel_data", {}).get("hotels", []))
+    weather_cond = ts.get("weather_data", {}).get("condition", "")
+
+    if trains_count or driving_km or hotels_count or weather_cond:
+        st.divider()
+        st.subheader("🛠️ Active MCP Tool Results")
+        if trains_count:
+            st.markdown(f'<span class="data-pill">🚆 {trains_count} IRCTC Trains</span>', unsafe_allow_html=True)
+        if driving_km:
+            st.markdown(f'<span class="data-pill">🚗 {driving_km} km Highway</span>', unsafe_allow_html=True)
+        if hotels_count:
+            st.markdown(f'<span class="data-pill">🏨 {hotels_count} Hotels</span>', unsafe_allow_html=True)
+        if weather_cond:
+            st.markdown(f'<span class="data-pill">🌤️ {weather_cond[:25]}</span>', unsafe_allow_html=True)
+
+    # -----------------------------------------------------------------------
+    # Phase 2: RAG Knowledge Base Management UI
+    # -----------------------------------------------------------------------
+    st.divider()
+    st.subheader("📚 ChromaDB Knowledge Base")
+    rag = st.session_state.rag_tool
+    stats = rag.get_stats()
+    st.write(f"• **Indexed Chunks**: `{stats['total_chunks']}`")
+    st.write(f"• **Guide Documents**: `{stats['unique_sources_count']}`")
+
+    # Upload new travel document
+    uploaded_file = st.file_uploader(
+        "Upload guide (.md, .txt, .pdf, .csv):",
+        type=["md", "txt", "pdf", "csv"],
+        key="rag_uploader",
+    )
+    if uploaded_file is not None:
+        save_path = Path("data") / "travel_docs" / uploaded_file.name
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        with st.spinner(f"Indexing {uploaded_file.name}..."):
+            content = rag.load_file_content(save_path)
+            added = rag.add_text(content, source=uploaded_file.name)
+            st.success(f"✅ Indexed `{uploaded_file.name}` ({added} chunks)!")
+            st.rerun()
+
+    if st.button("🔄 Rebuild Knowledge Base", use_container_width=True):
+        with st.spinner("Rebuilding ChromaDB knowledge base..."):
+            res = rag.build_knowledge_base(force_recreate=True)
+            st.success(f"Indexed {res['documents_indexed']} documents ({res['chunks_added']} chunks)!")
+            st.rerun()
 
     st.divider()
     st.subheader("💡 Quick Starter Queries")
@@ -133,7 +207,9 @@ with st.sidebar:
 st.markdown('<div class="main-title">🌍 Yatra AI — Travel Planner</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-title">Intelligent Domestic Travel Planning for India | '
-    '<span class="badge-phase1">Phase 1: Multi-turn NLU & StateGraph</span></div>',
+    '<span class="badge-phase">LangGraph Core</span>'
+    '<span class="badge-rag">ChromaDB RAG (Phase 2)</span>'
+    '<span class="badge-mcp">LangChain ReAct + MCP (Phase 3)</span></div>',
     unsafe_allow_html=True,
 )
 
@@ -159,7 +235,7 @@ if user_input:
     st.session_state.travel_state["messages"] = list(st.session_state.messages)
 
     # 2. Invoke LangGraph Workflow
-    with st.spinner("Processing with Yatra AI NLU engine..."):
+    with st.spinner("Executing Yatra AI LangGraph & Tool-Calling Pipeline..."):
         try:
             workflow = st.session_state.workflow
             config = {"configurable": {"thread_id": "yatra_streamlit_session"}}
