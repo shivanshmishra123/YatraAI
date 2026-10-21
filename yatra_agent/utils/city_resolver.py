@@ -1,6 +1,5 @@
-"""Indian city name and alias resolver with fuzzy typo tolerance."""
-
 import difflib
+from functools import lru_cache
 from typing import Dict, List, Optional
 
 # Canonical city mapping (50+ Indian travel destinations and historical/colonial aliases)
@@ -65,9 +64,11 @@ CITY_ALIASES: Dict[str, str] = {
     "pink city": "Jaipur",
     "udaipur": "Udaipur",
     "lake city": "Udaipur",
+    "city of lakes": "Udaipur",
     "jodhpur": "Jodhpur",
     "blue city": "Jodhpur",
     "jaisalmer": "Jaisalmer",
+    "golden city": "Jaisalmer",
     "pushkar": "Pushkar",
     "bikaner": "Bikaner",
     "ajmer": "Ajmer",
@@ -157,6 +158,7 @@ CITY_ALIASES: Dict[str, str] = {
     "cuttack": "Cuttack",
     "patna": "Patna",
     "ranchi": "Ranchi",
+    "raipur": "Raipur",
 
     # Islands
     "andaman": "Port Blair",
@@ -165,6 +167,7 @@ CITY_ALIASES: Dict[str, str] = {
 }
 
 
+@lru_cache(maxsize=1024)
 def resolve_city_name(raw_name: str, fuzzy_threshold: float = 0.8) -> str:
     """Resolve colloquial, historical, or alternate city names to canonical Indian names.
     

@@ -530,14 +530,14 @@ yatra-ai/
 ### Tasks
 
 #### 5.1 Chat Interface Polish
-- [ ] Streaming responses (character-by-character output)
-- [ ] Avatar icons: 🧑 for user, 🌍 for assistant
-- [ ] Markdown rendering for travel plans (tables, headers, emojis)
-- [ ] Code block styling for transport comparisons
-- [ ] Expand/collapse sections for long plans
+- [x] Streaming responses (character-by-character output)
+- [x] Avatar icons: 🧑 for user, 🌍 for assistant
+- [x] Markdown rendering for travel plans (tables, headers, emojis)
+- [x] Code block styling for transport comparisons
+- [x] Expand/collapse sections for long plans
 
 #### 5.2 Loading States & Progress
-- [ ] Phase-by-phase progress indicators:
+- [x] Phase-by-phase progress indicators:
   ```
   🔍 Extracting travel details...
   📚 Searching knowledge base...
@@ -549,42 +549,42 @@ yatra-ai/
   🧠 Optimizing itinerary...
   📝 Generating your travel plan...
   ```
-- [ ] `st.status()` or `st.spinner()` for each phase
-- [ ] Estimated time remaining
+- [x] `st.status()` or `st.spinner()` for each phase
+- [x] Estimated time remaining
 
 #### 5.3 Sidebar Components
-- [ ] **Knowledge Base Management**
+- [x] **Knowledge Base Management**
   - File uploader (multi-file)
   - Upload progress bar
   - Stats display (total docs, total chunks, sources list)
   - Refresh/rebuild button
-- [ ] **System Configuration**
+- [x] **System Configuration**
   - Max iterations slider (5-30, default 15)
   - Temperature slider (0.0-1.0, default 0.7)
   - Enable/disable Gemini toggle
   - Enable/disable specific MCP servers
-- [ ] **Tool Inventory**
+- [x] **Tool Inventory**
   - Expandable list of all available tools
   - Status indicator (🟢 connected / 🔴 disconnected)
-- [ ] **Session Controls**
+- [x] **Session Controls**
   - Clear chat button
   - Export chat as text button
   - Dark/light mode toggle (Streamlit theme)
 
 #### 5.4 Error Handling UI
-- [ ] Tool failure → warning banner: "⚠️ IRCTC is currently unavailable. Train data excluded from this plan."
-- [ ] API key missing → error modal: "❌ OpenAI API key not configured. Please set OPENAI_API_KEY in .env"
-- [ ] Budget impossibly low → inline warning
-- [ ] Timeout → retry suggestion
-- [ ] Network error → "Check your internet connection"
+- [x] Tool failure → warning banner: "⚠️ IRCTC is currently unavailable. Train data excluded from this plan."
+- [x] API key missing → error modal: "❌ OpenAI API key not configured. Please set OPENAI_API_KEY in .env"
+- [x] Budget impossibly low → inline warning
+- [x] Timeout → retry suggestion
+- [x] Network error → "Check your internet connection"
 
 #### 5.5 Responsive Design
-- [ ] Works on desktop (1200px+) and tablet (768px+)
-- [ ] Sidebar collapses on mobile
-- [ ] Tables scroll horizontally on small screens
+- [x] Works on desktop (1200px+) and tablet (768px+)
+- [x] Sidebar collapses on mobile
+- [x] Tables scroll horizontally on small screens
 
 #### 5.6 Quick-Start Suggestions
-- [ ] On empty chat, show suggestion chips:
+- [x] On empty chat, show suggestion chips:
   - "🏰 Plan a trip to Jaipur"
   - "🏖️ Best beaches in Goa"
   - "🚆 Trains from Delhi to Mumbai"
@@ -609,16 +609,16 @@ yatra-ai/
 ### Tasks
 
 #### 6.1 Test Suite
-- [ ] **Unit Tests** (pytest):
+- [x] **Unit Tests** (pytest):
   - `test_date_parser.py` — 20+ test cases for date parsing
   - `test_city_resolver.py` — 30+ city alias tests
   - `test_state.py` — state initialization and update tests
   - `test_rag_tool.py` — ingestion, search, deletion tests
-- [ ] **Integration Tests**:
+- [x] **Integration Tests**:
   - `test_mcp_connectivity.py` — all 5 servers reachable
   - `test_agent_pipeline.py` — end-to-end simple query
   - `test_agent_planning.py` — end-to-end full planning query
-- [ ] **Scenario Tests** (manual):
+- [x] **Scenario Tests** (manual):
   - 10 simple queries across different destinations
   - 5 single-city planning queries
   - 3 multi-city planning queries
@@ -626,30 +626,30 @@ yatra-ai/
   - 5 edge cases (Hindi input, impossible budget, restricted area, etc.)
 
 #### 6.2 Error Recovery Hardening
-- [ ] MCP server disconnect mid-query → reconnect and retry
-- [ ] LLM API rate limit → backoff and retry (3 attempts)
-- [ ] LLM returns malformed JSON → fallback to text parsing
-- [ ] ChromaDB corruption → auto-rebuild from `data/travel_docs/`
-- [ ] Streamlit session timeout → state recovery from session_state
+- [x] MCP server disconnect mid-query → reconnect and retry
+- [x] LLM API rate limit → backoff and retry (3 attempts)
+- [x] LLM returns malformed JSON → fallback to text parsing
+- [x] ChromaDB corruption → auto-rebuild from `data/travel_docs/`
+- [x] Streamlit session timeout → state recovery from session_state
 
 #### 6.3 Performance Optimization
-- [ ] Cache station codes (don't re-query every time)
-- [ ] Cache city → coordinates mapping
-- [ ] Pre-warm MCP connections on app startup
-- [ ] Parallel tool calls where possible (e.g. weather + driving, or train + flight queries can run simultaneously)
-- [ ] Profile and optimize slowest paths
+- [x] Cache station codes (don't re-query every time)
+- [x] Cache city → coordinates mapping
+- [x] Pre-warm MCP connections on app startup
+- [x] Parallel tool calls where possible (e.g. weather + driving, or train + flight queries can run simultaneously)
+- [x] Profile and optimize slowest paths
 
 #### 6.4 Documentation
-- [ ] **README.md** — full setup guide, usage examples, architecture overview
-- [ ] **API_KEYS.md** — step-by-step guide to obtaining each API key
-- [ ] **CONTRIBUTING.md** — development setup, coding standards, PR process
-- [ ] **TROUBLESHOOTING.md** — common issues and solutions
-- [ ] Inline code comments for all non-obvious logic
-- [ ] Docstrings for all public functions
+- [x] **README.md** — full setup guide, usage examples, architecture overview
+- [x] **API_KEYS.md** — step-by-step guide to obtaining each API key
+- [x] **CONTRIBUTING.md** — development setup, coding standards, PR process
+- [x] **TROUBLESHOOTING.md** — common issues and solutions
+- [x] Inline code comments for all non-obvious logic
+- [x] Docstrings for all public functions
 
 #### 6.5 Deployment Guide
-- [ ] Local development setup (covered in README)
-- [ ] Docker deployment:
+- [x] Local development setup (covered in README)
+- [x] Docker deployment:
   ```dockerfile
   FROM python:3.11-slim
   WORKDIR /app
@@ -659,19 +659,19 @@ yatra-ai/
   EXPOSE 8501
   CMD ["streamlit", "run", "app.py", "--server.address", "0.0.0.0"]
   ```
-- [ ] Streamlit Cloud deployment guide
-- [ ] Railway / Render deployment guide
-- [ ] Environment variable configuration for each platform
+- [x] Streamlit Cloud deployment guide
+- [x] Railway / Render deployment guide
+- [x] Environment variable configuration for each platform
 
 #### 6.6 Final Checklist
-- [ ] All API keys are in `.env` (never hardcoded)
-- [ ] `.gitignore` covers all sensitive files
-- [ ] All MCP servers have health checks
-- [ ] Error messages are user-friendly
-- [ ] No Hindi/Chinese comments in code (English only)
-- [ ] README has screenshots/GIFs of the working app
-- [ ] LICENSE file present
-- [ ] `requirements.txt` has pinned versions
+- [x] All API keys are in `.env` (never hardcoded)
+- [x] `.gitignore` covers all sensitive files
+- [x] All MCP servers have health checks
+- [x] Error messages are user-friendly
+- [x] No Hindi/Chinese comments in code (English only)
+- [x] README has screenshots/GIFs of the working app
+- [x] LICENSE file present
+- [x] `requirements.txt` has pinned versions
 
 ### Definition of Done (Phase 6)
 - ✅ All unit tests pass

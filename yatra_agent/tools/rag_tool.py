@@ -103,22 +103,49 @@ class TravelRAGTool:
     def __init__(self, persist_dir: Optional[str] = None):
         self.persist_dir = persist_dir or CHROMA_PERSIST_DIR
         Path(self.persist_dir).mkdir(parents=True, exist_ok=True)
-
-        self.client = chromadb.PersistentClient(
-            path=self.persist_dir,
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
         self.embedding_fn = _get_embedding_function()
-        self.collection: Collection = self.client.get_or_create_collection(
-            name=self.COLLECTION_NAME,
-            embedding_function=self.embedding_fn,
-            metadata={"hnsw:space": "cosine"},
-        )
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=RAG_CHUNK_SIZE,
             chunk_overlap=RAG_CHUNK_OVERLAP,
             separators=["\n## ", "\n### ", "\n\n", "\n", ". ", " "],
         )
+
+        try:
+            self.client = chromadb.PersistentClient(
+                path=self.persist_dir,
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
+            self.collection: Collection = self.client.get_or_create_collection(
+                name=self.COLLECTION_NAME,
+                embedding_function=self.embedding_fn,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception as e:
+            logger.error(f"ChromaDB initialization encountered corruption or schema error: {e}. Auto-rebuilding...")
+            import shutil
+            try:
+                # Attempt to recreate in clean recovered directory
+                clean_dir = str(Path(self.persist_dir).parent / f"{Path(self.persist_dir).name}_recovered")
+                Path(clean_dir).mkdir(parents=True, exist_ok=True)
+                self.persist_dir = clean_dir
+                self.client = chromadb.PersistentClient(
+                    path=self.persist_dir,
+                    settings=ChromaSettings(anonymized_telemetry=False),
+                )
+                self.collection = self.client.get_or_create_collection(
+                    name=self.COLLECTION_NAME,
+                    embedding_function=self.embedding_fn,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                logger.info("ChromaDB recovery directory created successfully.")
+            except Exception as re_err:
+                logger.error(f"Persistent client recovery failed: {re_err}. Falling back to in-memory EphemeralClient...")
+                self.client = chromadb.EphemeralClient(settings=ChromaSettings(anonymized_telemetry=False))
+                self.collection = self.client.get_or_create_collection(
+                    name=self.COLLECTION_NAME,
+                    embedding_function=self.embedding_fn,
+                    metadata={"hnsw:space": "cosine"},
+                )
 
     def load_file_content(self, file_path: Path) -> str:
         """Extract plain text from supported document types (.md, .txt, .pdf, .csv)."""

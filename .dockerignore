@@ -1,0 +1,28 @@
+# Version control
+.git
+.gitignore
+
+# Virtual environment
+.venv
+venv
+env
+
+# Bytecode & caches
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+
+# Environment secrets
+.env
+*.local
+
+# ChromaDB binary data (will rebuild or mount via volumes)
+data/travel_vectordb
+
+# IDE & OS files
+.vscode
+.idea
+.DS_Store
+Thumbs.db
