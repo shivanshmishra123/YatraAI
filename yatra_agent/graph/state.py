@@ -1,12 +1,82 @@
-"""TravelPlanState TypedDict definition for LangGraph."""
+"""TravelPlanState TypedDict definition and state management helpers for Yatra AI."""
 
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 from typing_extensions import TypedDict
 
 
-def update_messages(existing: List[Any], new_messages: List[Any]) -> List[Any]:
-    """Helper reducer to append messages."""
-    return existing + new_messages
+def create_initial_state() -> "TravelPlanState":
+    """Create an empty, initialized TravelPlanState dictionary."""
+    return {
+        "messages": [],
+        "origin": "",
+        "destinations": [],
+        "departure_date": "",
+        "return_date": "",
+        "num_days": 0,
+        "budget": 0.0,
+        "budget_currency": "INR",
+        "num_travelers": 1,
+        "traveler_details": "",
+        "preferences": [],
+        "optimization_goal": "balanced",
+        "travel_mode_pref": "",
+        "query_type": "simple",
+        "needs_deep_analysis": False,
+        "complexity_reason": "",
+        "train_data": {},
+        "driving_data": {},
+        "hotel_data": {},
+        "weather_data": {},
+        "flight_data": {},
+        "bus_data": {},
+        "rag_results": [],
+        "query_plan": [],
+        "gemini_analysis": "",
+        "validation_passed": True,
+        "validation_feedback": "",
+        "iteration_count": 0,
+        "final_plan": "",
+    }
+
+
+def is_planning_ready(state: "TravelPlanState") -> Tuple[bool, List[str]]:
+    """Check if all essential fields are collected to trigger the full itinerary planning pipeline.
+    
+    Returns:
+        (ready: bool, missing_fields: list[str])
+    """
+    missing = []
+    if not state.get("origin"):
+        missing.append("origin")
+    if not state.get("destinations") or len(state["destinations"]) == 0:
+        missing.append("destinations")
+    if not state.get("departure_date") and (not state.get("num_days") or state.get("num_days") <= 0):
+        missing.append("departure_date")
+    
+    return len(missing) == 0, missing
+
+
+def merge_state_updates(state: "TravelPlanState", updates: Dict[str, Any]) -> "TravelPlanState":
+    """Merge extracted updates into an existing travel state without overwriting non-empty fields with empties."""
+    updated: TravelPlanState = dict(state)  # type: ignore
+    for key, val in updates.items():
+        if val is None or val == "" or val == [] or val == {} or val == 0:
+            continue
+        # For destinations, append or merge uniquely if list
+        if key == "destinations" and isinstance(val, list):
+            existing_dests = [d.lower() for d in updated.get("destinations", [])]
+            for d in val:
+                if d and d.lower() not in existing_dests:
+                    updated.setdefault("destinations", []).append(d)
+        elif key == "preferences" and isinstance(val, list):
+            existing_prefs = [p.lower() for p in updated.get("preferences", [])]
+            for p in val:
+                if p and p.lower() not in existing_prefs:
+                    updated.setdefault("preferences", []).append(p)
+        else:
+            updated[key] = val  # type: ignore
+            
+    return updated
 
 
 class TravelPlanState(TypedDict, total=False):

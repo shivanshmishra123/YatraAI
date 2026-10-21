@@ -156,7 +156,7 @@ yatra-ai/
 ### Tasks
 
 #### 1.1 State Definition (`state.py`)
-- [ ] Define `TravelPlanState` TypedDict:
+- [x] Define `TravelPlanState` TypedDict:
   ```python
   class TravelPlanState(TypedDict):
       messages: list              # Chat history
@@ -190,24 +190,24 @@ yatra-ai/
   ```
 
 #### 1.2 Prompt Templates (`prompts.py`)
-- [ ] Write `INFORMATION_EXTRACTION_PROMPT` — system prompt for GPT-4o-mini to extract travel parameters from natural language
-- [ ] Write `PLANNER_SYSTEM_PROMPT` — system prompt for the planning agent describing all available tools and their usage patterns
-- [ ] Write `SYNTHESIZER_PROMPT_TEMPLATE` — template for generating the final travel plan from gathered data
-- [ ] Write `GEMINI_STRATEGY_PROMPT` — prompt for Gemini 1.5 Pro to decompose complex queries into a query_plan
-- [ ] Write `SIMPLE_QUERY_PROMPT` — lightweight prompt for simple destination queries
-- [ ] Write `MISSING_INFO_PROMPT` — prompt to ask users for missing required fields
+- [x] Write `INFORMATION_EXTRACTION_PROMPT` — system prompt for GPT-4o-mini to extract travel parameters from natural language
+- [x] Write `PLANNER_SYSTEM_PROMPT` — system prompt for the planning agent describing all available tools and their usage patterns
+- [x] Write `SYNTHESIZER_PROMPT_TEMPLATE` — template for generating the final travel plan from gathered data
+- [x] Write `GEMINI_STRATEGY_PROMPT` — prompt for Gemini 1.5 Pro to decompose complex queries into a query_plan
+- [x] Write `SIMPLE_QUERY_PROMPT` — lightweight prompt for simple destination queries
+- [x] Write `MISSING_INFO_PROMPT` — prompt to ask users for missing required fields
 
 #### 1.3 Information Extraction Node (`nodes.py`)
-- [ ] Implement `extract_info(user_message: str, state: TravelPlanState) -> TravelPlanState`
-- [ ] Use GPT-4o-mini with structured output (JSON mode) to extract fields
-- [ ] Handle relative dates: "tomorrow" → actual date in IST
-- [ ] Handle Hindi/Hinglish input
-- [ ] Handle city name aliases via `city_resolver.py`
-- [ ] Detect query type: simple vs full_planning
-- [ ] Return updated state with extracted fields
+- [x] Implement `extract_info(user_message: str, state: TravelPlanState) -> TravelPlanState`
+- [x] Use GPT-4o-mini with structured output (JSON mode) to extract fields
+- [x] Handle relative dates: "tomorrow" → actual date in IST
+- [x] Handle Hindi/Hinglish input
+- [x] Handle city name aliases via `city_resolver.py`
+- [x] Detect query type: simple vs full_planning
+- [x] Return updated state with extracted fields
 
 #### 1.4 City Name Resolver (`city_resolver.py`)
-- [ ] Create mapping dictionary:
+- [x] Create mapping dictionary:
   ```python
   CITY_ALIASES = {
       "bombay": "Mumbai", "mumbai": "Mumbai",
@@ -225,26 +225,26 @@ yatra-ai/
       # ... 50+ more entries
   }
   ```
-- [ ] Implement `resolve_city(name: str) -> str` with fuzzy matching
+- [x] Implement `resolve_city(name: str) -> str` with fuzzy matching
 
 #### 1.5 Date Parser (`date_parser.py`)
-- [ ] Implement `parse_travel_date(text: str) -> str` (returns YYYY-MM-DD)
-- [ ] Handle: "tomorrow", "day after tomorrow", "next Monday", "next week", "Dec 15", "15 December", "15/12/2026", "15-12-2026"
-- [ ] All dates in IST (UTC+5:30)
-- [ ] Handle Hindi: "kal", "parso", "agle hafte"
+- [x] Implement `parse_travel_date(text: str) -> str` (returns YYYY-MM-DD)
+- [x] Handle: "tomorrow", "day after tomorrow", "next Monday", "next week", "Dec 15", "15 December", "15/12/2026", "15-12-2026"
+- [x] All dates in IST (UTC+5:30)
+- [x] Handle Hindi: "kal", "parso", "agle hafte"
 
 #### 1.6 Basic Chat Interface (`app.py`)
-- [ ] Streamlit chat interface with `st.chat_message` and `st.chat_input`
-- [ ] Session state management for conversation history
-- [ ] Display extracted parameters in sidebar (debug view)
-- [ ] "Clear Chat" button
-- [ ] Basic message routing:
+- [x] Streamlit chat interface with `st.chat_message` and `st.chat_input`
+- [x] Session state management for conversation history
+- [x] Display extracted parameters in sidebar (debug view)
+- [x] "Clear Chat" button
+- [x] Basic message routing:
   - User sends message → extract info → if enough info, plan; else, ask for more
 
 #### 1.7 Simple Response Generation
-- [ ] For simple queries (no full plan needed), GPT-4o-mini generates a conversational response
-- [ ] For incomplete planning requests, system asks for missing fields
-- [ ] For complete planning requests, placeholder: "All information collected! Planning pipeline coming in Phase 3."
+- [x] For simple queries (no full plan needed), GPT-4o-mini generates a conversational response
+- [x] For incomplete planning requests, system asks for missing fields
+- [x] For complete planning requests, placeholder: "All information collected! Planning pipeline coming in Phase 3."
 
 ### Definition of Done (Phase 1)
 - ✅ User can chat naturally, and the system extracts origin/destination/dates/budget
