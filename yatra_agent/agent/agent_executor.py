@@ -71,39 +71,143 @@ def execute_travel_planning_agent(state: TravelPlanState) -> TravelPlanState:
     mcp = MCPToolManager()
 
     async def _fetch_all_travel_data():
-        train_task = mcp.call_tool("IRCTC Server", "train_search", {
-            "origin": origin,
-            "destination": primary_dest,
-            "travel_date": travel_date,
-        })
-        maps_task = mcp.call_tool("Google Maps Server", "get_directions", {
-            "origin": origin,
-            "destination": primary_dest,
-        })
-        hotel_task = mcp.call_tool("Google Maps Server", "hotel_search", {
-            "location": primary_dest,
-            "budget_per_night": budget_per_night,
-            "num_nights": num_days,
-        })
-        weather_task = mcp.call_tool("Weather Server", "get_forecast", {
-            "city": primary_dest,
-            "date": travel_date,
-        })
-        bus_task = mcp.call_tool("Bus Server", "search_buses", {
-            "origin": origin,
-            "destination": primary_dest,
-            "date": travel_date,
-        })
-        flight_task = mcp.call_tool("Flight Server", "search_flights", {
-            "origin": origin,
-            "destination": primary_dest,
-            "date": travel_date,
-        })
+        if len(destinations) <= 1:
+            # Single destination flow
+            train_task = mcp.call_tool("IRCTC Server", "train_search", {
+                "origin": origin,
+                "destination": primary_dest,
+                "travel_date": travel_date,
+            })
+            maps_task = mcp.call_tool("Google Maps Server", "get_directions", {
+                "origin": origin,
+                "destination": primary_dest,
+            })
+            hotel_task = mcp.call_tool("Google Maps Server", "hotel_search", {
+                "location": primary_dest,
+                "budget_per_night": budget_per_night,
+                "num_nights": num_days,
+            })
+            weather_task = mcp.call_tool("Weather Server", "get_forecast", {
+                "city": primary_dest,
+                "date": travel_date,
+            })
+            bus_task = mcp.call_tool("Bus Server", "search_buses", {
+                "origin": origin,
+                "destination": primary_dest,
+                "date": travel_date,
+            })
+            flight_task = mcp.call_tool("Flight Server", "search_flights", {
+                "origin": origin,
+                "destination": primary_dest,
+                "date": travel_date,
+            })
 
-        return await asyncio.gather(
-            train_task, maps_task, hotel_task, weather_task, bus_task, flight_task,
-            return_exceptions=True,
-        )
+            res = await asyncio.gather(
+                train_task, maps_task, hotel_task, weather_task, bus_task, flight_task,
+                return_exceptions=True,
+            )
+            return [r if isinstance(r, dict) else {} for r in res]
+        else:
+            # Multi-city circuit planning
+            legs = []
+            curr = origin
+            for d in destinations:
+                legs.append((curr, d))
+                curr = d
+            if curr != origin:
+                legs.append((curr, origin))
+
+            train_tasks = [
+                mcp.call_tool("IRCTC Server", "train_search", {"origin": f_c, "destination": t_c, "travel_date": travel_date})
+                for f_c, t_c in legs
+            ]
+            maps_tasks = [
+                mcp.call_tool("Google Maps Server", "get_directions", {"origin": f_c, "destination": t_c})
+                for f_c, t_c in legs
+            ]
+            hotel_tasks = [
+                mcp.call_tool("Google Maps Server", "hotel_search", {"location": d, "budget_per_night": budget_per_night, "num_nights": max(1, num_days // len(destinations))})
+                for d in destinations
+            ]
+            weather_tasks = [
+                mcp.call_tool("Weather Server", "get_forecast", {"city": d, "date": travel_date})
+                for d in destinations
+            ]
+            bus_task = mcp.call_tool("Bus Server", "search_buses", {"origin": legs[0][0], "destination": legs[0][1], "date": travel_date})
+            flight_task = mcp.call_tool("Flight Server", "search_flights", {"origin": legs[0][0], "destination": legs[0][1], "date": travel_date})
+
+            all_tasks = train_tasks + maps_tasks + hotel_tasks + weather_tasks + [bus_task, flight_task]
+            all_res = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+            # Partition results
+            n_legs = len(legs)
+            n_dests = len(destinations)
+
+            idx = 0
+            train_results = [r for r in all_res[idx : idx + n_legs] if isinstance(r, dict)]
+            idx += n_legs
+
+            maps_results = [r for r in all_res[idx : idx + n_legs] if isinstance(r, dict)]
+            idx += n_legs
+
+            hotel_results = [r for r in all_res[idx : idx + n_dests] if isinstance(r, dict)]
+            idx += n_dests
+
+            weather_results = [r for r in all_res[idx : idx + n_dests] if isinstance(r, dict)]
+            idx += n_dests
+
+            bus_res = all_res[idx] if isinstance(all_res[idx], dict) else {}
+            idx += 1
+            flight_res = all_res[idx] if isinstance(all_res[idx], dict) else {}
+
+            # Aggregate train results
+            combined_trains = []
+            for tr in train_results:
+                combined_trains.extend(tr.get("trains", []))
+            train_res = {"trains": combined_trains if combined_trains else train_results[0].get("trains", []) if train_results else []}
+
+            # Aggregate maps results
+            total_km = sum(m.get("distance_km", 0) for m in maps_results)
+            total_petrol = sum(m.get("estimated_fuel_cost_inr", {}).get("petrol", 0) for m in maps_results)
+            total_diesel = sum(m.get("estimated_fuel_cost_inr", {}).get("diesel", 0) for m in maps_results)
+            total_tolls = sum(m.get("estimated_toll_cost_inr", 0) for m in maps_results)
+            all_routes = []
+            for m in maps_results:
+                all_routes.extend(m.get("recommended_routes", []))
+
+            maps_res = {
+                "distance_km": total_km,
+                "driving_duration": f"{max(3, total_km // 65)}h total driving",
+                "recommended_routes": list(dict.fromkeys(all_routes)),
+                "estimated_fuel_cost_inr": {"petrol": total_petrol, "diesel": total_diesel},
+                "estimated_toll_cost_inr": total_tolls,
+                "road_condition": "Multi-highway circuit connecting national corridors",
+            }
+
+            # Aggregate hotel results
+            combined_hotels = []
+            for hr in hotel_results:
+                combined_hotels.extend(hr.get("hotels", []))
+            hotel_res = {"hotels": combined_hotels}
+
+            # Aggregate weather results
+            combined_alerts = []
+            temp_ranges = []
+            for wr in weather_results:
+                if wr.get("travel_alerts"):
+                    combined_alerts.extend(wr.get("travel_alerts"))
+                if wr.get("temperature_range"):
+                    temp_ranges.append(f"{wr.get('city', '')}: {wr.get('temperature_range')}")
+
+            weather_res = {
+                "temperature_range": "; ".join(temp_ranges) if temp_ranges else weather_results[0].get("temperature_range", "22°C - 32°C"),
+                "condition": weather_results[0].get("condition", "Partly Cloudy") if weather_results else "Pleasant",
+                "humidity": "55%",
+                "precipitation_probability": "15%",
+                "travel_alerts": list(dict.fromkeys(combined_alerts)),
+            }
+
+            return [train_res, maps_res, hotel_res, weather_res, bus_res, flight_res]
 
     try:
         try:
@@ -121,9 +225,7 @@ def execute_travel_planning_agent(state: TravelPlanState) -> TravelPlanState:
         logger.error(f"Error executing async travel data tasks: {e}")
         raw_results = [{}, {}, {}, {}, {}, {}]
 
-    train_res, maps_res, hotel_res, weather_res, bus_res, flight_res = [
-        r if isinstance(r, dict) else {} for r in raw_results
-    ]
+    train_res, maps_res, hotel_res, weather_res, bus_res, flight_res = raw_results
 
     state["train_data"] = train_res
     state["driving_data"] = maps_res

@@ -419,7 +419,7 @@ yatra-ai/
 ### Tasks
 
 #### 4.1 Pre-Analysis Layer (`pre_analyze_query` in `nodes.py`)
-- [ ] Implement complexity detection:
+- [x] Implement complexity detection:
   ```python
   def pre_analyze_query(state: TravelPlanState) -> TravelPlanState:
       needs_deep = False
@@ -453,18 +453,18 @@ yatra-ai/
   ```
 
 #### 4.2 Gemini 1.5 Pro Integration (`gemini_tool.py`)
-- [ ] Initialize Google Generative AI client with `GOOGLE_API_KEY`
-- [ ] Model: `gemini-1.5-pro` (or `gemini-2.0-flash` for faster option)
-- [ ] Implement `call_gemini_for_strategy(state: TravelPlanState) -> dict`:
+- [x] Initialize Google Generative AI client with `GOOGLE_API_KEY`
+- [x] Model: `gemini-1.5-pro` (or `gemini-2.0-flash` for faster option)
+- [x] Implement `call_gemini_for_strategy(state: TravelPlanState) -> dict`:
   - Input: full travel state + user constraints
   - Output: structured `query_plan` (ordered list of tool calls + budget allocation + route optimization)
-- [ ] Implement `call_gemini_for_optimization(state: TravelPlanState) -> str`:
+- [x] Implement `call_gemini_for_optimization(state: TravelPlanState) -> str`:
   - Input: all gathered data (trains, hotels, weather, etc.)
   - Output: optimized itinerary with reasoning
-- [ ] Token usage tracking and cost logging
+- [x] Token usage tracking and cost logging
 
 #### 4.3 Dual-Mode Routing
-- [ ] In `app.py` main agent loop:
+- [x] In `app.py` main agent loop:
   ```python
   if state["needs_deep_analysis"]:
       # Gemini-led mode
@@ -484,31 +484,31 @@ yatra-ai/
   ```
 
 #### 4.4 Multi-Destination Support
-- [ ] Route optimization: for N cities, determine optimal visit order
+- [x] Route optimization: for N cities, determine optimal visit order
   - Use Gemini to reason about: distance minimization, logical geographic flow, time-of-day constraints
-- [ ] Per-segment planning: each city-to-city leg gets its own transport query
-- [ ] Per-city planning: each destination gets hotel, weather, POI queries
-- [ ] Budget distribution across segments
-- [ ] Combined synthesis: unified multi-city itinerary
+- [x] Per-segment planning: each city-to-city leg gets its own transport query
+- [x] Per-city planning: each destination gets hotel, weather, POI queries
+- [x] Budget distribution across segments
+- [x] Combined synthesis: unified multi-city itinerary
 
 #### 4.5 Synthesizer Node Enhancement
-- [ ] Update `synthesizer_node` to handle:
+- [x] Update `synthesizer_node` to handle:
   - Single-city plans (standard)
   - Multi-city plans (segmented output)
   - Gemini-optimized plans (include reasoning)
-- [ ] Output format: rich Markdown with tables, emojis, sections
-- [ ] Budget breakdown table
-- [ ] Transport comparison table
-- [ ] Day-wise itinerary with time slots
+- [x] Output format: rich Markdown with tables, emojis, sections
+- [x] Budget breakdown table
+- [x] Transport comparison table
+- [x] Day-wise itinerary with time slots
 
 #### 4.6 Complexity Logging
-- [ ] Log to Streamlit terminal:
+- [x] Log to Streamlit terminal:
   ```
   📊 Pre-analysis: {needs_deep: True, reasons: ["multi_city_route", "tight_budget"]}
   🧠 Mode: Gemini-led (complex scenario)
   🔄 Query plan: [train_query(DEL→JP), hotel_search(Jaipur), ...]
   ```
-- [ ] Display in Streamlit UI:
+- [x] Display in Streamlit UI:
   ```
   🌍 Detected multi-city itinerary — activating deep route optimization...
   ```

@@ -56,6 +56,15 @@ st.markdown(
         border-radius: 4px;
         font-weight: 600;
         font-size: 0.82rem;
+        margin-right: 4px;
+    }
+    .badge-gemini {
+        background-color: #f3e8fd;
+        color: #7b1fa2;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 0.82rem;
     }
     .data-pill {
         display: inline-block;
@@ -136,6 +145,8 @@ with st.sidebar:
     st.markdown(f"**Budget:** {budget_display}")
     st.markdown(f"**Travelers:** {travelers_display}")
     st.markdown(f"**Routing Mode:** `{mode_display}` ({deep_reasoning})")
+    if ts.get("needs_deep_analysis") and ts.get("complexity_reason"):
+        st.caption(f"🧠 **Trigger:** `{ts['complexity_reason']}`")
 
     # Display live tool results if gathered
     trains_count = len(ts.get("train_data", {}).get("trains", []))
@@ -190,6 +201,9 @@ with st.sidebar:
     st.divider()
     st.subheader("💡 Quick Starter Queries")
     starter_prompts = [
+        "Delhi → Agra → Jaipur, 5 days, ₹15,000 for elderly parents",
+        "Plan Delhi to Jaipur, 3 days, ₹1200 for 1 person",
+        "Find cheapest way from Delhi to Varanasi",
         "Plan Delhi to Jaipur, 3 days, ₹8000, starting Dec 15",
         "What are the best places in Jaipur?",
         "Bangalore to Goa this weekend for 2 people",
@@ -209,7 +223,8 @@ st.markdown(
     '<div class="sub-title">Intelligent Domestic Travel Planning for India | '
     '<span class="badge-phase">LangGraph Core</span>'
     '<span class="badge-rag">ChromaDB RAG (Phase 2)</span>'
-    '<span class="badge-mcp">LangChain ReAct + MCP (Phase 3)</span></div>',
+    '<span class="badge-mcp">LangChain ReAct + MCP (Phase 3)</span>'
+    '<span class="badge-gemini">Dual-Model Gemini 1.5 Pro (Phase 4)</span></div>',
     unsafe_allow_html=True,
 )
 
