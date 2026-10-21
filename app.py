@@ -390,24 +390,32 @@ st.markdown('<div class="main-title">🌍 Yatra AI — Travel Planner</div>', un
 st.markdown(
     '<div class="sub-title">Intelligent Domestic Travel Planning for India | '
     '<span class="badge-phase">LangGraph Core</span>'
-    '<span class="badge-rag">ChromaDB RAG</span>'
-    '<span class="badge-mcp">LangChain ReAct + MCP</span>'
+    '<span class="badge-rag">ChromaDB ONNX RAG</span>'
+    '<span class="badge-mcp">Groq Llama 3.3 70B</span>'
     '<span class="badge-gemini">Dual-Model Gemini 1.5 Pro</span>'
     '</div>',
     unsafe_allow_html=True,
 )
 
 # API Mode Status Banner
-openai_key = os.getenv("OPENAI_API_KEY", "")
+from yatra_agent.core.llm_factory import get_active_llm_info
+llm_info = get_active_llm_info()
 google_key = os.getenv("GOOGLE_API_KEY", "")
-has_live_keys = bool(openai_key and not openai_key.startswith("sk-your") and len(openai_key) > 20)
+has_live_keys = bool(llm_info["status"] != "LOCAL_FALLBACK_ACTIVE" or (google_key and len(google_key) > 20))
 
 if not has_live_keys:
     st.markdown(
         '<div class="caution-banner">'
-        'ℹ️ <strong>Domestic Offline Engine Active:</strong> '
-        'Running with deterministic local MCP engines, ChromaDB RAG, and high-reasoning fallback strategist. '
-        'All IRCTC routes, highway calculations, hotels, weather, and budget optimizations are 100% operational!'
+        'ℹ️ <strong>Domestic Fallback Engine Active:</strong> '
+        'Running with deterministic local MCP engines, local ONNX ChromaDB RAG, and high-reasoning fallback strategist. '
+        'Add your free <code>GROQ_API_KEY</code> and <code>GOOGLE_API_KEY</code> in <code>.env</code> to enable live online inference!'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        f'<div style="background-color: #e6f4ea; border-left: 4px solid #137333; padding: 10px 14px; border-radius: 6px; font-size: 0.88rem; color: #1e4620; margin-bottom: 1rem;">'
+        f'⚡ <strong>Live Fast Inference Online:</strong> Primary LLM: <strong>{llm_info["provider"]} ({llm_info["model"]})</strong> | Reasoning Engine: <strong>Gemini 1.5 Pro</strong>'
         '</div>',
         unsafe_allow_html=True,
     )

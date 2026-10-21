@@ -33,18 +33,13 @@ logger = logging.getLogger("yatra_ai.agent")
 
 def build_planning_agent(api_key: Optional[str] = None):
     """Assemble LangChain ReAct agent bound with all 5 MCP travel tools + RAG knowledge retrieval."""
-    openai_key = api_key or os.getenv("OPENAI_API_KEY", "")
-    if not openai_key or openai_key.startswith("sk-your") or len(openai_key) < 20:
+    from yatra_agent.core.llm_factory import get_primary_llm
+
+    llm = get_primary_llm(temperature=PRIMARY_MODEL_TEMPERATURE)
+    if not llm:
         return None
 
     try:
-        from langchain_openai import ChatOpenAI
-
-        llm = ChatOpenAI(
-            model=PRIMARY_MODEL,
-            temperature=PRIMARY_MODEL_TEMPERATURE,
-            api_key=openai_key,
-        )
         tools = get_all_tools()
         agent = create_react_agent(
             model=llm,

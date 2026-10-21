@@ -36,6 +36,13 @@ STOPWORDS = {
 }
 
 
+try:
+    from chromadb.api.collection_configuration import register_embedding_function
+except ImportError:
+    register_embedding_function = lambda cls: cls
+
+
+@register_embedding_function
 class DeterministicLocalEmbeddingFunction(EmbeddingFunction[Documents]):
     """Fast, deterministic word-hash embedding function for offline/test environments."""
 
@@ -77,7 +84,21 @@ class DeterministicLocalEmbeddingFunction(EmbeddingFunction[Documents]):
 
 
 def _get_embedding_function():
-    """Return OpenAIEmbeddingFunction if API key is valid, else deterministic local fallback."""
+    """Return embedding function for ChromaDB.
+    
+    Supports:
+    - 'onnx': Local ONNX all-MiniLM-L6-v2 (Zero cost, runs on CPU)
+    - OpenAI: text-embedding-3-small (if OPENAI_API_KEY is explicitly configured)
+    - Default: DeterministicLocalEmbeddingFunction (1536-dim, zero overhead, fast)
+    """
+    provider = os.getenv("EMBEDDING_PROVIDER", "").lower()
+    if provider == "onnx":
+        try:
+            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+            return DefaultEmbeddingFunction()
+        except Exception as e:
+            logger.warning(f"DefaultEmbeddingFunction unavailable ({e}), using default.")
+
     openai_key = os.getenv("OPENAI_API_KEY", "")
     if openai_key and not openai_key.startswith("sk-your") and len(openai_key) > 20:
         try:
@@ -86,8 +107,8 @@ def _get_embedding_function():
                 api_key=openai_key,
                 model_name=EMBEDDING_MODEL,
             )
-        except Exception as e:
-            logger.warning(f"Could not initialize OpenAI embedding function, using fallback: {e}")
+        except Exception:
+            pass
 
     return DeterministicLocalEmbeddingFunction()
 

@@ -198,30 +198,29 @@ def extract_info_node(state: TravelPlanState) -> TravelPlanState:
         return state
 
     extracted_data: Dict[str, Any] = {}
-    openai_key = os.getenv("OPENAI_API_KEY")
+    from yatra_agent.core.llm_factory import get_primary_llm
+    llm = get_primary_llm(temperature=0.0, json_mode=True)
 
-    # Attempt LLM extraction if API key is provided
-    if openai_key and not openai_key.startswith("sk-your"):
+    # Attempt LLM extraction if provider is available
+    if llm:
         try:
-            from langchain_openai import ChatOpenAI
             from langchain_core.messages import SystemMessage, HumanMessage
 
             current_ist = get_current_ist_datetime().strftime("%d-%m-%Y (%A)")
             system_prompt = INFORMATION_EXTRACTION_PROMPT.format(current_date_ist=current_ist)
-
-            llm = ChatOpenAI(
-                model=PRIMARY_MODEL,
-                temperature=0.0,
-                api_key=openai_key,
-                model_kwargs={"response_format": {"type": "json_object"}},
-            )
 
             res = llm.invoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_message),
             ])
 
-            extracted_data = json.loads(res.content)
+            cleaned_text = res.content.strip()
+            if cleaned_text.startswith("```json"):
+                cleaned_text = cleaned_text[7:]
+            if cleaned_text.endswith("```"):
+                cleaned_text = cleaned_text[:-3]
+
+            extracted_data = json.loads(cleaned_text.strip())
             logger.info(f"LLM extraction result: {extracted_data}")
         except Exception as e:
             logger.warning(f"LLM extraction failed, using fallback heuristic: {e}")
@@ -362,12 +361,12 @@ def simple_query_node(state: TravelPlanState) -> TravelPlanState:
     except Exception as e:
         logger.warning(f"RAG search error in simple_query_node: {e}")
 
-    openai_key = os.getenv("OPENAI_API_KEY")
+    from yatra_agent.core.llm_factory import get_primary_llm
+    llm = get_primary_llm(temperature=PRIMARY_MODEL_TEMPERATURE)
     response_text = ""
 
-    if openai_key and not openai_key.startswith("sk-your"):
+    if llm:
         try:
-            from langchain_openai import ChatOpenAI
             from langchain_core.messages import SystemMessage, HumanMessage
 
             prompt = SIMPLE_QUERY_PROMPT.format(
@@ -375,7 +374,6 @@ def simple_query_node(state: TravelPlanState) -> TravelPlanState:
                 rag_context=rag_context or "Standard curated guidelines apply.",
             )
 
-            llm = ChatOpenAI(model=PRIMARY_MODEL, temperature=PRIMARY_MODEL_TEMPERATURE, api_key=openai_key)
             res = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=user_message)])
             response_text = res.content
             if sources:
@@ -429,13 +427,13 @@ def missing_info_node(state: TravelPlanState, missing_fields: List[str]) -> Trav
     budget = f"₹{state.get('budget', 0):,.0f}" if state.get("budget", 0) > 0 else "Flexible / Not specified"
     travelers = f"{state.get('num_travelers', 1)} travelers"
 
-    openai_key = os.getenv("OPENAI_API_KEY")
+    from yatra_agent.core.llm_factory import get_primary_llm
+    llm = get_primary_llm(temperature=0.5)
     response_text = ""
 
-    if openai_key and not openai_key.startswith("sk-your"):
+    if llm:
         try:
-            from langchain_openai import ChatOpenAI
-            from langchain_core.messages import SystemMessage, HumanMessage
+            from langchain_core.messages import SystemMessage
 
             prompt = MISSING_INFO_PROMPT.format(
                 origin=origin,
@@ -445,7 +443,6 @@ def missing_info_node(state: TravelPlanState, missing_fields: List[str]) -> Trav
                 travelers=travelers,
                 missing_fields=", ".join(missing_fields),
             )
-            llm = ChatOpenAI(model=PRIMARY_MODEL, temperature=0.5, api_key=openai_key)
             res = llm.invoke([SystemMessage(content=prompt)])
             response_text = res.content
         except Exception as e:

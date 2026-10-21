@@ -13,8 +13,8 @@ DATA_DIR = BASE_DIR / "data"
 TRAVEL_DOCS_DIR = os.getenv("TRAVEL_DOCS_DIR", str(DATA_DIR / "travel_docs"))
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", str(DATA_DIR / "travel_vectordb"))
 
-# Model Configuration
-PRIMARY_MODEL = "gpt-4o-mini"
+# Model Configuration (Groq Llama 3.3 70B / OpenRouter / OpenAI)
+PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "llama-3.3-70b-versatile")
 PRIMARY_MODEL_TEMPERATURE = 0.7
 PRIMARY_MODEL_MAX_TOKENS = 4096
 
@@ -22,8 +22,9 @@ REASONING_MODEL = "gemini-1.5-pro"
 REASONING_MODEL_TEMPERATURE = 0.3
 REASONING_MODEL_MAX_TOKENS = 8192
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
+# Embedding Configuration (Local ONNX all-MiniLM-L6-v2 - 100% Free & Local)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
 
 # RAG Configuration
 RAG_CHUNK_SIZE = 500

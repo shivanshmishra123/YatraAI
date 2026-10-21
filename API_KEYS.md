@@ -8,26 +8,29 @@ Yatra AI is designed with a **zero-failure architecture**. It functions complete
 
 | Service | Environment Variable | Required? | Purpose | Free Tier / Pricing |
 |:---|:---|:---:|:---|:---|
-| **OpenAI** | `OPENAI_API_KEY` | Optional | Powers GPT-4o-mini for NLU parameter extraction and ReAct tool synthesis | ~$0.15 / 1M input tokens (GPT-4o-mini) |
-| **Google AI Studio** | `GOOGLE_API_KEY` | Optional | Powers Gemini 1.5 Pro for deep multi-city route optimization & budget survival | Free tier available (15 RPM) |
+| **Groq Cloud** (Recommended) | `GROQ_API_KEY` | Optional | Powers **Llama 3.3 70B Versatile** for lightning-fast NLU extraction & ReAct agent | **100% Free Tier** (30 RPM, 14,400 req/day, zero credit card) |
+| **Google AI Studio** | `GOOGLE_API_KEY` | Optional | Powers **Gemini 1.5 Pro** for deep multi-city route optimization & budget survival | Free tier available (15 RPM) |
 | **Google Maps** | `GMAPS_API_KEY` | Optional | Real-time driving directions, traffic, place search, and hotel data | $200 free monthly credit (~40,000 requests) |
 | **WeatherAPI / OpenWeather**| `WEATHER_API_KEY` | Optional | Live regional 7-day weather forecasts and storm/heatwave alerts | Free tier: 1,000 calls/day |
 | **Amadeus Travel** | `AMADEUS_API_KEY`<br>`AMADEUS_API_SECRET` | Optional | Live domestic flight search (DEL, BOM, BLR, MAA, CCU, GOI) | Free Self-Service tier: 2,000 calls/month |
+| **OpenRouter / OpenAI** | `OPENROUTER_API_KEY`<br>`OPENAI_API_KEY` | Optional | Alternative free models or legacy OpenAI endpoints | Free models available on OpenRouter |
 | **LangSmith** | `LANGCHAIN_API_KEY` | Optional | Observability, execution traces, and agent latency profiling | Free personal tier |
 
 ---
 
 ## 🛠️ Step-by-Step Acquisition Guide
 
-### 1. OpenAI API Key (`OPENAI_API_KEY`)
-1. Visit [platform.openai.com](https://platform.openai.com/).
-2. Log in or create an account.
-3. Navigate to **API Keys** in the dashboard sidebar.
-4. Click **Create new secret key**, give it a name (e.g. `yatra-ai`), and copy the key (`sk-...`).
+### 1. Groq Cloud Free API Key (`GROQ_API_KEY`) — Recommended
+Groq provides **ultra-fast inference completely for free** without requiring a credit card:
+1. Visit **[console.groq.com](https://console.groq.com/)**.
+2. Sign in with your Google or GitHub account.
+3. In the left navigation, click **API Keys**.
+4. Click **Create API Key**, name it `yatra-ai`, and copy the key (`gsk_...`).
 5. Add to your `.env`:
    ```bash
-   OPENAI_API_KEY=sk-your-openai-key-here
+   GROQ_API_KEY=gsk_your_groq_api_key_here
    ```
+*Free Tier limits: 30 requests/minute, 14,400 requests/day, Llama 3.3 70B with 128k context.*
 
 ---
 
