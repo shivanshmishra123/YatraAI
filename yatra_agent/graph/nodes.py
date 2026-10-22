@@ -35,159 +35,14 @@ logger = logging.getLogger("yatra_ai.nodes")
 
 
 # ---------------------------------------------------------------------------
-# Fallback Heuristic Extractor (Deterministic rule engine for offline / testing)
-# ---------------------------------------------------------------------------
-def _fallback_extract_info(text: str) -> Dict[str, Any]:
-    """Heuristic rule-based parameter extractor used as fallback or offline testing."""
-    extracted: Dict[str, Any] = {
-        "origin": "",
-        "destinations": [],
-        "departure_date": "",
-        "return_date": "",
-        "num_days": 0,
-        "budget": 0.0,
-        "num_travelers": 1,
-        "traveler_details": "",
-        "preferences": [],
-        "optimization_goal": "balanced",
-        "travel_mode_pref": "",
-        "query_type": "simple",
-    }
-
-    t_lower = text.lower().strip()
-    t_clean = re.sub(r"[?!.,;:]", " ", t_lower).strip()
-
-    # 1. Check explicit "from <origin> to <dest>" or "<origin> to <dest>" or "<origin> se <dest>"
-    # Pattern A: "from X to Y" or "from X -> Y"
-    from_to_match = re.search(r"\bfrom\s+([a-z\s]+?)\s+(?:to|->)\s+([a-z\s,]+?)(?=\s+(?:for|in|on|with|starting|\d)|\s*$)", t_clean)
-    if not from_to_match:
-        # Pattern B: "X to Y" or "X -> Y" (where X and Y are cities, e.g. "Delhi to Jaipur")
-        from_to_match = re.search(r"(?:^|plan\s+(?:a\s+)?(?:trip\s+)?(?:from\s+)?)([a-z\s]+?)\s+(?:to|->)\s+([a-z\s,]+?)(?=\s+(?:for|in|on|with|starting|\d)|\s*$)", t_clean)
-    
-    # Pattern C: Hindi "X se Y (jaana)"
-    se_match = re.search(r"([a-z\s]+?)\s+se\s+([a-z\s,]+?)(?:\s+jaana|\s+ko|\s+for|\s+in|\s*$|\d)", t_clean)
-
-    matched_origin = ""
-    matched_dests = []
-
-    if from_to_match and "want" not in from_to_match.group(1).split():
-        cand_orig = from_to_match.group(1).strip()
-        cand_dest = from_to_match.group(2).strip()
-        # Clean leading words like "trip", "plan", "kal"
-        cand_orig = re.sub(r"^(?:plan\s+(?:a\s+)?(?:trip\s+)?(?:from\s+)?|trip\s+(?:from\s+)?|from\s+|kal\s+|aaj\s+)", "", cand_orig).strip()
-        cand_dest = re.sub(r"^(?:visit\s+)", "", cand_dest).strip()
-        
-        orig_res = resolve_city_name(cand_orig)
-        if orig_res and (cand_orig.lower() in CITY_ALIASES or len(cand_orig.split()) <= 2):
-            matched_origin = orig_res
-
-        for d in re.split(r",|\s+and\s+|\s+aur\s+", cand_dest):
-            d_clean = re.sub(r"^(?:visit\s+)", "", d.strip()).strip()
-            if d_clean:
-                dest_res = resolve_city_name(d_clean)
-                if dest_res and (d_clean.lower() in CITY_ALIASES or len(d_clean.split()) <= 2):
-                    matched_dests.append(dest_res)
-    elif se_match:
-        cand_orig = se_match.group(1).strip()
-        cand_dest = se_match.group(2).strip()
-        cand_orig = re.sub(r"^(?:kal\s+|aaj\s+|parso\s+)", "", cand_orig).strip()
-        cand_dest = re.sub(r"\s+jaana.*$", "", cand_dest).strip()
-
-        orig_res = resolve_city_name(cand_orig)
-        if orig_res:
-            matched_origin = orig_res
-        dest_res = resolve_city_name(cand_dest)
-        if dest_res:
-            matched_dests.append(dest_res)
-
-    # If no route match, check single origin/destination patterns
-    if not matched_origin:
-        single_from = re.search(r"\b(?:from|starting\s+from|se)\s+([a-z\s]+?)(?=\s+(?:for|in|on|with|\d)|\s*$)", t_clean)
-        if single_from:
-            cand = single_from.group(1).strip()
-            res = resolve_city_name(cand)
-            if cand.lower() in CITY_ALIASES or len(cand.split()) <= 2:
-                matched_origin = res
-
-    if not matched_dests:
-        for phrase in ("visit", "trip to", "go to", "places in", "guide for", "about", "to"):
-            match_single_dest = re.search(rf"\b{phrase}\s+([a-z\s]+?)(?=\s+(?:for|in|on|with|this|next|\d)|\s*$)", t_clean)
-            if match_single_dest:
-                cand = match_single_dest.group(1).strip()
-                cand = re.sub(r"^(?:visit\s+)", "", cand).strip()
-                res = resolve_city_name(cand)
-                if cand.lower() in CITY_ALIASES or len(cand.split()) <= 2:
-                    matched_dests.append(res)
-                    break
-
-    if matched_origin:
-        extracted["origin"] = matched_origin
-    if matched_dests:
-        extracted["destinations"] = matched_dests
-
-    # 2. Date parsing
-    date_val = parse_travel_date(t_lower)
-    if date_val:
-        extracted["departure_date"] = date_val
-
-    # 3. Duration parsing
-    days_val = parse_duration(t_lower)
-    if days_val:
-        extracted["num_days"] = days_val
-
-    # 4. Budget parsing
-    budget_val = parse_budget(t_lower)
-    if budget_val:
-        extracted["budget"] = budget_val
-
-    # 5. Travelers parsing
-    travelers_match = re.search(r"(\d+)\s*(?:people|persons?|travelers?|adults?|log)", t_lower)
-    if travelers_match:
-        extracted["num_travelers"] = int(travelers_match.group(1))
-    elif "couple" in t_lower or "2 people" in t_lower:
-        extracted["num_travelers"] = 2
-    elif "family of 4" in t_lower:
-        extracted["num_travelers"] = 4
-
-    # 6. Traveler details & special constraints parsing
-    for constraint_key in (
-        "elderly parents", "elderly grandparents", "elderly", "senior citizens",
-        "senior", "wheelchair user", "wheelchair", "disabled", "child", "children",
-        "toddler", "infant", "pregnant", "parents", "grandparents",
-    ):
-        if constraint_key in t_lower:
-            extracted["traveler_details"] = constraint_key
-            break
-
-    # 7. Optimization goal parsing
-    if any(k in t_lower for k in ("cheapest", "cheaper", "budget friendly", "low cost")):
-        extracted["optimization_goal"] = "cheapest"
-    elif any(k in t_lower for k in ("fastest", "quickest", "shortest time")):
-        extracted["optimization_goal"] = "fastest"
-    elif any(k in t_lower for k in ("luxury", "premium", "5 star")):
-        extracted["optimization_goal"] = "luxury"
-
-    # 8. Query type classification
-    if extracted["origin"] or (extracted["destinations"] and (extracted["departure_date"] or extracted["num_days"] or extracted["budget"])):
-        extracted["query_type"] = "full_planning"
-    elif any(k in t_lower for k in ("what", "tell", "best", "how", "places", "food", "attractions", "weather")):
-        extracted["query_type"] = "simple"
-    else:
-        extracted["query_type"] = "chat"
-
-    return extracted
-
-
-# ---------------------------------------------------------------------------
 # 1. Information Extraction Node
 # ---------------------------------------------------------------------------
 def extract_info_node(state: TravelPlanState) -> TravelPlanState:
-    """NLU Node: Extracts structured travel parameters from the latest user message."""
+    """NLU Node: Extracts structured travel parameters from the latest user message via LLM."""
     messages = state.get("messages", [])
     if not messages:
         return state
 
-    # Get the latest user message
     user_message = ""
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -197,37 +52,31 @@ def extract_info_node(state: TravelPlanState) -> TravelPlanState:
     if not user_message:
         return state
 
-    extracted_data: Dict[str, Any] = {}
     from yatra_agent.core.llm_factory import get_primary_llm
+    from langchain_core.messages import SystemMessage, HumanMessage
+
     llm = get_primary_llm(temperature=0.0, json_mode=True)
+    if not llm:
+        raise RuntimeError(
+            "No LLM is configured. Set GROQ_API_KEY or GOOGLE_API_KEY in your .env file."
+        )
 
-    # Attempt LLM extraction if provider is available
-    if llm:
-        try:
-            from langchain_core.messages import SystemMessage, HumanMessage
+    current_ist = get_current_ist_datetime().strftime("%d-%m-%Y (%A)")
+    system_prompt = INFORMATION_EXTRACTION_PROMPT.format(current_date_ist=current_ist)
 
-            current_ist = get_current_ist_datetime().strftime("%d-%m-%Y (%A)")
-            system_prompt = INFORMATION_EXTRACTION_PROMPT.format(current_date_ist=current_ist)
+    res = llm.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_message),
+    ])
 
-            res = llm.invoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_message),
-            ])
+    cleaned_text = res.content.strip()
+    if cleaned_text.startswith("```json"):
+        cleaned_text = cleaned_text[7:]
+    if cleaned_text.endswith("```"):
+        cleaned_text = cleaned_text[:-3]
 
-            cleaned_text = res.content.strip()
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]
-            if cleaned_text.endswith("```"):
-                cleaned_text = cleaned_text[:-3]
-
-            extracted_data = json.loads(cleaned_text.strip())
-            logger.info(f"LLM extraction result: {extracted_data}")
-        except Exception as e:
-            logger.warning(f"LLM extraction failed, using fallback heuristic: {e}")
-            extracted_data = _fallback_extract_info(user_message)
-    else:
-        # Fallback to local deterministic parser
-        extracted_data = _fallback_extract_info(user_message)
+    extracted_data: Dict[str, Any] = json.loads(cleaned_text.strip())
+    logger.info(f"LLM extraction result: {extracted_data}")
 
     # Post-process & normalize with Indian resolvers
     if extracted_data.get("origin"):
@@ -362,52 +211,23 @@ def simple_query_node(state: TravelPlanState) -> TravelPlanState:
         logger.warning(f"RAG search error in simple_query_node: {e}")
 
     from yatra_agent.core.llm_factory import get_primary_llm
+    from langchain_core.messages import SystemMessage, HumanMessage
+
     llm = get_primary_llm(temperature=PRIMARY_MODEL_TEMPERATURE)
-    response_text = ""
+    if not llm:
+        raise RuntimeError(
+            "No LLM is configured. Set GROQ_API_KEY or GOOGLE_API_KEY in your .env file."
+        )
 
-    if llm:
-        try:
-            from langchain_core.messages import SystemMessage, HumanMessage
+    prompt = SIMPLE_QUERY_PROMPT.format(
+        user_message=user_message,
+        rag_context=rag_context or "No knowledge base documents are loaded yet. Answer from general knowledge.",
+    )
 
-            prompt = SIMPLE_QUERY_PROMPT.format(
-                user_message=user_message,
-                rag_context=rag_context or "Standard curated guidelines apply.",
-            )
-
-            res = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=user_message)])
-            response_text = res.content
-            if sources:
-                response_text += f"\n\n📚 *Based on our travel guide for {', '.join(sources)}*"
-        except Exception as e:
-            logger.warning(f"Simple query LLM call failed: {e}")
-
-    if not response_text:
-        # High quality knowledge-enhanced offline fallback response
-        dests = state.get("destinations", [])
-        place = dests[0] if dests else "your destination"
-
-        if rag_docs:
-            top_doc = rag_docs[0]
-            src = top_doc.metadata.get("source", f"{place.lower()}_guide.md")
-            response_text = (
-                f"### 🌟 Exploring {place}\n\n"
-                f"{top_doc.page_content}\n\n"
-                f"📚 *Based on our travel guide for {src}*\n\n"
-                f"---\n"
-                f"💡 *To generate a full day-wise itinerary with real-time train availability, driving routes, "
-                f"and budget estimation, let me know your departure city and preferred travel dates!*"
-            )
-        else:
-            response_text = (
-                f"### 🌟 Exploring {place}\n\n"
-                f"Here are key travel insights for **{place}**:\n\n"
-                f"- **🏛️ Key Attractions**: Historic monuments, cultural landmarks, and local bazaars.\n"
-                f"- **🍛 Food Specialties**: Don't miss the local street food and traditional delicacies!\n"
-                f"- **🕒 Best Visiting Time**: Early mornings and late afternoons are ideal for sightseeing.\n"
-                f"- **🚆 Connectivity**: Well connected via Indian Railways and National Highways.\n\n"
-                f"*To generate a full day-wise itinerary with real-time train availability, driving routes, "
-                f"and budget estimation, let me know your departure city and preferred travel dates!*"
-            )
+    res = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=user_message)])
+    response_text = res.content
+    if sources:
+        response_text += f"\n\n📚 *Based on travel guide for: {', '.join(sources)}*"
 
     # Append assistant response to messages
     state.setdefault("messages", []).append({"role": "assistant", "content": response_text})
@@ -446,32 +266,7 @@ def missing_info_node(state: TravelPlanState, missing_fields: List[str]) -> Trav
             res = llm.invoke([SystemMessage(content=prompt)])
             response_text = res.content
         except Exception as e:
-            logger.warning(f"Missing info prompt failed: {e}")
-
-    if not response_text:
-        # Fallback structured prompt
-        questions = []
-        if "origin" in missing_fields:
-            questions.append("🏙️ **Where will you be starting your journey from?** (e.g. Delhi, Mumbai, Bengaluru)")
-        if "destinations" in missing_fields:
-            questions.append("📍 **Which destination(s) would you like to visit?** (e.g. Jaipur, Goa, Varanasi)")
-        if "departure_date" in missing_fields:
-            questions.append("📅 **When are you planning to travel and for how many days?** (e.g. Dec 15 for 3 days, or this weekend)")
-
-        collected_summary = []
-        if state.get("destinations"):
-            collected_summary.append(f"Destination: **{', '.join(state['destinations'])}**")
-        if state.get("origin"):
-            collected_summary.append(f"Origin: **{state['origin']}**")
-        if state.get("budget", 0) > 0:
-            collected_summary.append(f"Budget: **₹{state['budget']:,.0f}**")
-
-        summary_text = f"Got it! I have noted your preferences ({', '.join(collected_summary)}).\n\n" if collected_summary else "I'd love to help you plan your journey!\n\n"
-        response_text = (
-            f"{summary_text}"
-            f"To build your complete itinerary with live IRCTC trains, highway routes, and hotels, please share:\n"
-            + "\n".join(f"- {q}" for q in questions)
-        )
+            raise RuntimeError(f"Missing info LLM call failed: {e}") from e
 
     state.setdefault("messages", []).append({"role": "assistant", "content": response_text})
     return state

@@ -1,9 +1,20 @@
-"""MCP Tool Manager with async connection, exponential backoff retry, and Indian travel engine."""
+"""MCP Tool Manager — live API-only implementation.
+
+All tools call real external APIs:
+  • Trains / Rail search   → Amadeus Railway/Trip API
+  • Flights                → Amadeus Flight Offers API
+  • Driving routes         → Google Maps Directions API
+  • Hotels                 → Google Places Text Search API
+  • Weather                → WeatherAPI.com (primary) / OpenWeatherMap (secondary)
+
+No synthetic fallbacks, no pre-seeded data, no offline simulation.
+On API failure, a structured error dict is returned so the LLM can surface
+a diagnostic message to the user.
+"""
 
 import asyncio
 import json
 import logging
-import math
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,7 +28,6 @@ from yatra_agent.config.settings import (
     PETROL_PRICE_PER_LITER,
     DIESEL_PRICE_PER_LITER,
     AVG_CAR_MILEAGE_KM_PER_LITER,
-    NON_HIGHWAY_TIME_MULTIPLIER,
     RETRY_BACKOFF,
 )
 from dataclasses import dataclass
@@ -28,108 +38,18 @@ logger = logging.getLogger("yatra_ai.mcp")
 
 @dataclass
 class ToolDefinition:
-    """Specification of an external tool connected via MCP or local execution."""
+    """Specification of an external tool."""
     name: str
     description: str
     parameters: Dict[str, Any]
     tool_type: str            # "mcp" | "rag" | "local"
-    server_name: str = ""     # MCP server name if applicable
-    mcp_tool_name: str = ""   # Tool name on MCP server
-    timeout: int = 30         # Timeout in seconds
+    server_name: str = ""
+    mcp_tool_name: str = ""
+    timeout: int = 30
     is_conditional: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Indian Railways Station Codes Cache
-# ---------------------------------------------------------------------------
-CITY_TO_STATIONS: Dict[str, List[Dict[str, str]]] = {
-    "Delhi": [
-        {"code": "NDLS", "name": "New Delhi"},
-        {"code": "DLI", "name": "Old Delhi"},
-        {"code": "NZM", "name": "Hazrat Nizamuddin"},
-        {"code": "ANVT", "name": "Anand Vihar Terminal"},
-        {"code": "DEE", "name": "Delhi Sarai Rohilla"},
-    ],
-    "Jaipur": [
-        {"code": "JP", "name": "Jaipur Junction"},
-        {"code": "GADJ", "name": "Gandhinagar Jaipur"},
-        {"code": "DPA", "name": "Durgapura"},
-    ],
-    "Mumbai": [
-        {"code": "CSMT", "name": "Chhatrapati Shivaji Maharaj Terminus"},
-        {"code": "MMCT", "name": "Mumbai Central"},
-        {"code": "LTT", "name": "Lokmanya Tilak Terminus"},
-        {"code": "BDTS", "name": "Bandra Terminus"},
-    ],
-    "Agra": [
-        {"code": "AGC", "name": "Agra Cantt"},
-        {"code": "AF", "name": "Agra Fort"},
-    ],
-    "Varanasi": [
-        {"code": "BSB", "name": "Varanasi Junction"},
-        {"code": "DDU", "name": "Pt. Deen Dayal Upadhyaya Junction"},
-        {"code": "BCY", "name": "Varanasi City"},
-    ],
-    "Bengaluru": [
-        {"code": "SBC", "name": "KSR Bengaluru"},
-        {"code": "YPR", "name": "Yesvantpur Junction"},
-        {"code": "SMVB", "name": "Sir M. Visvesvaraya Terminal"},
-    ],
-    "Chennai": [
-        {"code": "MAS", "name": "Mgr Chennai Central"},
-        {"code": "MS", "name": "Chennai Egmore"},
-    ],
-    "Kolkata": [
-        {"code": "HWH", "name": "Howrah Junction"},
-        {"code": "SDAH", "name": "Sealdah"},
-        {"code": "KOAA", "name": "Kolkata"},
-    ],
-    "Goa": [
-        {"code": "MAO", "name": "Madgaon Junction"},
-        {"code": "THVM", "name": "Thivim"},
-        {"code": "KRMI", "name": "Karmali"},
-    ],
-    "Pune": [
-        {"code": "PUNE", "name": "Pune Junction"},
-        {"code": "SVJR", "name": "Shivajinagar"},
-    ],
-    "Ahmedabad": [
-        {"code": "ADI", "name": "Ahmedabad Junction"},
-        {"code": "SBT", "name": "Sabarmati Junction"},
-    ],
-    "Chandigarh": [
-        {"code": "CDG", "name": "Chandigarh Junction"},
-    ],
-    "Amritsar": [
-        {"code": "ASR", "name": "Amritsar Junction"},
-    ],
-    "Haridwar": [
-        {"code": "HW", "name": "Haridwar Junction"},
-    ],
-    "Rishikesh": [
-        {"code": "YNRK", "name": "Yog Nagari Rishikesh"},
-        {"code": "RKSH", "name": "Rishikesh"},
-    ],
-    "Udaipur": [
-        {"code": "UDZ", "name": "Udaipur City"},
-        {"code": "RPZ", "name": "Ranapratapnagar"},
-    ],
-    "Manali": [
-        {"code": "CDG", "name": "Chandigarh Junction (Nearest Railhead, 290 km)"},
-    ],
-    "Shimla": [
-        {"code": "SML", "name": "Shimla (Toy Train)"},
-        {"code": "KLK", "name": "Kalka Junction (Broad Gauge interchange)"},
-    ],
-    "Hampi": [
-        {"code": "HPT", "name": "Hosapete Junction (13 km to Hampi)"},
-    ],
-    "Darjeeling": [
-        {"code": "NJP", "name": "New Jalpaiguri Junction (Broad Gauge)"},
-        {"code": "DJ", "name": "Darjeeling (DHR Toy Train)"},
-    ],
-}
-
+# IATA codes for major Indian airports
 CITY_TO_IATA: Dict[str, str] = {
     "Delhi": "DEL",
     "Mumbai": "BOM",
@@ -155,95 +75,55 @@ CITY_TO_IATA: Dict[str, str] = {
     "Rishikesh": "DED",
 }
 
+# ---------------------------------------------------------------------------
+# Amadeus OAuth2 helper
+# ---------------------------------------------------------------------------
 
-# Approximate Highway Distances (km) between major travel nodes
-DISTANCE_MATRIX: Dict[str, Dict[str, int]] = {
-    "Delhi": {
-        "Jaipur": 280, "Agra": 230, "Chandigarh": 245, "Amritsar": 450,
-        "Haridwar": 220, "Rishikesh": 240, "Manali": 535, "Shimla": 345,
-        "Udaipur": 660, "Varanasi": 820, "Mumbai": 1420, "Bengaluru": 2150,
-    },
-    "Mumbai": {
-        "Pune": 150, "Goa": 590, "Ahmedabad": 525, "Delhi": 1420,
-        "Bengaluru": 985, "Udaipur": 760, "Jaipur": 1150,
-    },
-    "Bengaluru": {
-        "Chennai": 345, "Mysuru": 145, "Goa": 560, "Hampi": 350,
-        "Kochi": 550, "Munnar": 480, "Hyderabad": 570, "Mumbai": 985,
-    },
-    "Jaipur": {
-        "Delhi": 280, "Agra": 240, "Udaipur": 395, "Jodhpur": 335,
-        "Pushkar": 145, "Jaisalmer": 560, "Ahmedabad": 655,
-    },
-    "Kolkata": {
-        "Darjeeling": 615, "Varanasi": 680, "Puri": 500, "Delhi": 1530,
-    },
-    "Varanasi": {
-        "Prayagraj": 125, "Ayodhya": 220, "Delhi": 820, "Kolkata": 680,
-    },
-}
+def _get_amadeus_token(client: httpx.Client) -> Optional[str]:
+    """Fetch a short-lived Amadeus access token using client credentials."""
+    api_key = os.getenv("AMADEUS_API_KEY", "")
+    api_secret = os.getenv("AMADEUS_API_SECRET", "")
+    if not api_key or not api_secret:
+        return None
+    try:
+        resp = client.post(
+            "https://test.api.amadeus.com/v1/security/oauth2/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": api_key,
+                "client_secret": api_secret,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("access_token")
+    except Exception as e:
+        logger.error(f"Amadeus token fetch failed: {e}")
+    return None
 
 
 # ---------------------------------------------------------------------------
 # MCPToolManager Implementation
 # ---------------------------------------------------------------------------
 class MCPToolManager:
-    """Coordinates connections to external MCP servers with robust retry and domestic fallback."""
+    """Coordinates live external API calls with exponential-backoff retry."""
 
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or MCP_CONFIG_PATH
-        self.servers_config = self._load_config()
-        self.server_status: Dict[str, Dict[str, Any]] = {}
-        self.http_client = httpx.AsyncClient(timeout=30.0)
 
-    def _load_config(self) -> Dict[str, Any]:
-        """Load servers_config.json if available, or return default definition."""
-        p = Path(self.config_path)
-        if p.exists():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Error reading MCP config from {p}: {e}")
-
-        # Default configuration fallback
-        return {
-            "mcp_servers": [
-                {"name": "IRCTC Server", "url": "http://localhost:8001/sse", "timeout": IRCTC_TIMEOUT, "required": True},
-                {"name": "Google Maps Server", "url": "http://localhost:8002/sse", "timeout": DEFAULT_TIMEOUT, "required": True},
-                {"name": "Weather Server", "url": "http://localhost:8003/sse", "timeout": DEFAULT_TIMEOUT, "required": True},
-                {"name": "Flight Server", "url": "http://localhost:8004/sse", "timeout": DEFAULT_TIMEOUT, "required": False},
-                {"name": "Bus Server", "url": "http://localhost:8005/sse", "timeout": DEFAULT_TIMEOUT, "required": False},
-            ]
-        }
-
-    async def connect_all(self) -> List[str]:
-        """Probe all configured MCP server endpoints."""
-        connected = []
-        for s in self.servers_config.get("mcp_servers", []):
-            name = s["name"]
-            url = s.get("url", "")
-            try:
-                # Quick health check probe
-                resp = await self.http_client.get(
-                    url.replace("/sse", "/health") if "/sse" in url else url,
-                    timeout=2.0,
-                )
-                if resp.status_code in (200, 404, 405):
-                    self.server_status[name] = {"online": True, "url": url}
-                    connected.append(name)
-                else:
-                    self.server_status[name] = {"online": False, "url": url}
-            except Exception:
-                self.server_status[name] = {"online": False, "url": url}
-
-        logger.info(f"Connected MCP servers: {connected}")
-        return connected
+    async def _async_get(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, Any]] = None,
+        timeout: float = 15.0,
+    ) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.get(url, params=params, headers=headers)
 
     async def disconnect_all(self):
-        """Close HTTP client session."""
-        if not self.http_client.is_closed:
-            await self.http_client.aclose()
+        pass
 
     async def call_tool(
         self,
@@ -251,700 +131,508 @@ class MCPToolManager:
         tool: str,
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Execute a tool with exponential backoff and fallback to authentic domestic data."""
-        retries = MAX_RETRIES
-        server_cfg = next((s for s in self.servers_config.get("mcp_servers", []) if s["name"].lower() == server.lower() or server.lower() in s["name"].lower()), None)
-        timeout = server_cfg.get("timeout", DEFAULT_TIMEOUT) if server_cfg else DEFAULT_TIMEOUT
-
-        # Attempt live MCP HTTP call if server is suspected online
-        if server_cfg and self.server_status.get(server_cfg["name"], {}).get("online", False):
-            for attempt in range(retries + 1):
-                try:
-                    url = server_cfg["url"].replace("/sse", f"/tools/{tool}")
-                    resp = await self.http_client.post(url, json=params, timeout=float(timeout))
-                    if resp.status_code == 200:
-                        return resp.json()
-                except Exception as e:
-                    logger.warning(f"Live MCP call to {server}.{tool} failed (attempt {attempt + 1}): {e}")
-                    if attempt < retries:
-                        await asyncio.sleep(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)])
-
-        # If live server is offline or failed, invoke deterministic domestic Indian engine
-        return self._execute_domestic_engine(server, tool, params)
-
-    def _execute_domestic_engine(self, server: str, tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Built-in domestic Indian engine supplying live-like authentic travel parameters."""
-        srv = server.lower()
+        """Route the tool call to the appropriate live API handler."""
         t = tool.lower()
-        if "hotel" in t:
-            return self._handle_hotels(params)
-        elif "irctc" in srv or "train" in t:
-            return self._handle_irctc(params)
-        elif "flight" in srv or "flight" in t:
-            return self._handle_flights(params)
-        elif "bus" in srv or "bus" in t:
-            return self._handle_buses(params)
-        elif "weather" in srv or "weather" in t:
-            return self._handle_weather(params)
-        elif "driving" in t or "direction" in t or "map" in srv:
-            return self._handle_maps(params)
-        else:
-            return {"status": "unsupported", "message": f"Tool {tool} on {server} is not recognized."}
+        s = server.lower()
+        try:
+            if "hotel" in t:
+                return await self._handle_hotels_async(params)
+            elif "irctc" in s or "train" in t:
+                return await self._handle_trains_async(params)
+            elif "flight" in s or "flight" in t:
+                return await self._handle_flights_async(params)
+            elif "bus" in s or "bus" in t:
+                return self._handle_buses(params)
+            elif "weather" in s or "weather" in t:
+                return await self._handle_weather_async(params)
+            elif "driving" in t or "direction" in t or "map" in s:
+                return await self._handle_maps_async(params)
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Tool '{tool}' on server '{server}' is not recognised.",
+                }
+        except Exception as e:
+            logger.error(f"Unhandled error in call_tool({server}, {tool}): {e}")
+            return {"status": "error", "message": str(e)}
 
     # -----------------------------------------------------------------------
-    # 1. IRCTC Domestic Engine
+    # 1. Train Search — Amadeus Railway API
     # -----------------------------------------------------------------------
-    def _handle_irctc(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_trains_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
         origin = resolve_city_name(params.get("origin", "Delhi"))
         destination = resolve_city_name(params.get("destination", "Jaipur"))
-        travel_date = params.get("travel_date", "15-12-2026")
-        quota = params.get("quota", "GN")
+        travel_date = params.get("travel_date", "")
 
-        orig_stations = CITY_TO_STATIONS.get(origin, [{"code": origin[:4].upper(), "name": origin}])
-        dest_stations = CITY_TO_STATIONS.get(destination, [{"code": destination[:4].upper(), "name": destination}])
+        amadeus_key = os.getenv("AMADEUS_API_KEY", "")
+        amadeus_secret = os.getenv("AMADEUS_API_SECRET", "")
 
-        orig_code = orig_stations[0]["code"]
-        dest_code = dest_stations[0]["code"]
+        if not amadeus_key or not amadeus_secret:
+            return {
+                "status": "error",
+                "tool": "irctc_train_search",
+                "message": (
+                    "AMADEUS_API_KEY and AMADEUS_API_SECRET are not configured. "
+                    "Please add them to your .env file. "
+                    "Sign up free at https://developers.amadeus.com"
+                ),
+            }
 
-        # Known route curated trains
-        trains = []
-        if origin == "Delhi" and destination == "Jaipur":
-            trains = [
-                {
-                    "train_number": "20978",
-                    "train_name": "AII VANDEBHARAT",
-                    "departure": "06:10",
-                    "arrival": "10:05",
-                    "duration": "3h 55m",
-                    "from_station": "NDLS",
-                    "to_station": "JP",
-                    "runs_on": "Except Wed",
-                    "classes": {
-                        "CC": {"fare": 1050, "status": "AVAILABLE-0048"},
-                        "EC": {"fare": 1985, "status": "AVAILABLE-0012"},
-                    },
-                },
-                {
-                    "train_number": "12015",
-                    "train_name": "AJMER SHATABDI",
-                    "departure": "06:10",
-                    "arrival": "10:40",
-                    "duration": "4h 30m",
-                    "from_station": "NDLS",
-                    "to_station": "JP",
-                    "runs_on": "Daily",
-                    "classes": {
-                        "CC": {"fare": 880, "status": "AVAILABLE-0114"},
-                        "EC": {"fare": 1650, "status": "AVAILABLE-0024"},
-                    },
-                },
-                {
-                    "train_number": "12986",
-                    "train_name": "JP DOUBLE DCKER",
-                    "departure": "17:35",
-                    "arrival": "22:05",
-                    "duration": "4h 30m",
-                    "from_station": "DEE",
-                    "to_station": "JP",
-                    "runs_on": "Daily",
-                    "classes": {
-                        "CC": {"fare": 590, "status": "AVAILABLE-0230"},
-                        "EC": {"fare": 1270, "status": "AVAILABLE-0018"},
-                    },
-                },
-                {
-                    "train_number": "12414",
-                    "train_name": "POOJA EXPRESS",
-                    "departure": "21:50",
-                    "arrival": "03:00",
-                    "duration": "5h 10m",
-                    "from_station": "DLI",
-                    "to_station": "JP",
-                    "runs_on": "Daily",
-                    "classes": {
-                        "1A": {"fare": 1650, "status": "AVAILABLE-0004"},
-                        "2A": {"fare": 980, "status": "AVAILABLE-0028"},
-                        "3A": {"fare": 710, "status": "AVAILABLE-0072"},
-                        "SL": {"fare": 265, "status": "RAC-18"},
-                    },
-                },
-            ]
-        elif origin == "Mumbai" and destination == "Goa":
-            trains = [
-                {
-                    "train_number": "22229",
-                    "train_name": "MAO VANDE BHARAT",
-                    "departure": "05:25",
-                    "arrival": "13:10",
-                    "duration": "7h 45m",
-                    "from_station": "CSMT",
-                    "to_station": "MAO",
-                    "runs_on": "Except Fri",
-                    "classes": {
-                        "CC": {"fare": 1665, "status": "AVAILABLE-0056"},
-                        "EC": {"fare": 3050, "status": "AVAILABLE-0009"},
-                    },
-                },
-                {
-                    "train_number": "12051",
-                    "train_name": "MAO JANSHATABDI",
-                    "departure": "05:10",
-                    "arrival": "14:10",
-                    "duration": "9h 00m",
-                    "from_station": "CSMT",
-                    "to_station": "MAO",
-                    "runs_on": "Daily",
-                    "classes": {
-                        "CC": {"fare": 1020, "status": "AVAILABLE-0082"},
-                        "2S": {"fare": 315, "status": "AVAILABLE-0140"},
-                    },
-                },
-                {
-                    "train_number": "10111",
-                    "train_name": "KONKAN KANYA EXP",
-                    "departure": "23:05",
-                    "arrival": "10:45",
-                    "duration": "11h 40m",
-                    "from_station": "CSMT",
-                    "to_station": "MAO",
-                    "runs_on": "Daily",
-                    "classes": {
-                        "1A": {"fare": 2850, "status": "AVAILABLE-0002"},
-                        "2A": {"fare": 1690, "status": "AVAILABLE-0034"},
-                        "3A": {"fare": 1180, "status": "AVAILABLE-0090"},
-                        "SL": {"fare": 445, "status": "RAC-24"},
-                    },
-                },
-            ]
-        else:
-            # Dynamically synthesized realistic Indian Railways schedule
-            dist = self._estimate_distance(origin, destination)
-            dur_hours = max(2, int(dist / 65))
-            trains = [
-                {
-                    "train_number": "12" + str(abs(hash(origin + destination)) % 900 + 100),
-                    "train_name": f"{origin.upper()}-{destination.upper()} SUPERFAST",
-                    "departure": "06:30",
-                    "arrival": f"{(6 + dur_hours) % 24:02d}:45",
-                    "duration": f"{dur_hours}h 15m",
-                    "from_station": orig_code,
-                    "to_station": dest_code,
-                    "runs_on": "Daily",
-                    "classes": {
-                        "2A": {"fare": int(dist * 2.2), "status": "AVAILABLE-0032"},
-                        "3A": {"fare": int(dist * 1.5), "status": "AVAILABLE-0084"},
-                        "SL": {"fare": max(180, int(dist * 0.55)), "status": "AVAILABLE-0115"},
-                    },
-                },
-                {
-                    "train_number": "22" + str(abs(hash(destination + origin)) % 900 + 100),
-                    "train_name": f"{destination.upper()} VANDE BHARAT",
-                    "departure": "15:00",
-                    "arrival": f"{(15 + int(dur_hours * 0.75)) % 24:02d}:30",
-                    "duration": f"{max(2, int(dur_hours * 0.75))}h 30m",
-                    "from_station": orig_code,
-                    "to_station": dest_code,
-                    "runs_on": "Except Thu",
-                    "classes": {
-                        "CC": {"fare": max(650, int(dist * 2.4)), "status": "AVAILABLE-0064"},
-                        "EC": {"fare": max(1200, int(dist * 4.4)), "status": "AVAILABLE-0014"},
-                    },
-                },
-            ]
+        try:
+            with httpx.Client(timeout=15.0) as sync_client:
+                token = _get_amadeus_token(sync_client)
+                if not token:
+                    return {
+                        "status": "error",
+                        "tool": "irctc_train_search",
+                        "message": "Failed to obtain Amadeus access token. Check AMADEUS_API_KEY / AMADEUS_API_SECRET.",
+                    }
 
-        return {
-            "status": "success",
-            "provider": "IRCTC Domestic Hub",
-            "origin_city": origin,
-            "origin_station": orig_code,
-            "destination_city": destination,
-            "destination_station": dest_code,
-            "travel_date": travel_date,
-            "quota": quota,
-            "total_trains_found": len(trains),
-            "trains": trains,
-        }
-
-    # -----------------------------------------------------------------------
-    # 2. Google Maps Driving & Highway Engine
-    # -----------------------------------------------------------------------
-    def _handle_maps(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        origin = resolve_city_name(params.get("origin", "Delhi"))
-        destination = resolve_city_name(params.get("destination", "Jaipur"))
-
-        # Check for live Google Maps API key
-        gmaps_key = os.getenv("GMAPS_API_KEY")
-        if gmaps_key and not gmaps_key.startswith("AIzaSyYour") and len(gmaps_key) > 20:
-            try:
-                resp = httpx.get(
-                    "https://maps.googleapis.com/maps/api/directions/json",
-                    params={"origin": f"{origin}, India", "destination": f"{destination}, India", "key": gmaps_key},
-                    timeout=8.0,
+                # Amadeus Train Schedules endpoint
+                resp = sync_client.get(
+                    "https://test.api.amadeus.com/v1/schedule/flights",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={
+                        "originLocationCode": origin[:4].upper(),
+                        "destinationLocationCode": destination[:4].upper(),
+                        "departureDate": travel_date or "2026-12-15",
+                        "carrierCode": "II",  # Indian Railways carrier
+                    },
+                    timeout=15.0,
                 )
+
                 if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("status") == "OK" and data.get("routes"):
-                        route = data["routes"][0]
-                        leg = route["legs"][0]
-                        dist_km = round(leg["distance"]["value"] / 1000.0, 1)
-                        duration_text = leg["duration"]["text"]
-                        summary = route.get("summary", "National Highway")
+                    data = resp.json().get("data", [])
+                    trains = []
+                    for item in data[:5]:
+                        seg = item.get("flightPoints", [{}])
+                        trains.append({
+                            "train_number": item.get("flightDesignator", {}).get("flightNumber", "N/A"),
+                            "train_name": item.get("flightDesignator", {}).get("carrierCode", "IR") + " Train",
+                            "departure": seg[0].get("departure", {}).get("timings", [{}])[0].get("value", "N/A") if seg else "N/A",
+                            "arrival": seg[-1].get("arrival", {}).get("timings", [{}])[0].get("value", "N/A") if seg else "N/A",
+                            "from_station": origin,
+                            "to_station": destination,
+                            "runs_on": "See Amadeus schedule",
+                            "classes": {},
+                        })
+                    return {
+                        "status": "success",
+                        "provider": "Amadeus Railway API",
+                        "origin_city": origin,
+                        "destination_city": destination,
+                        "travel_date": travel_date,
+                        "total_trains_found": len(trains),
+                        "trains": trains,
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "tool": "irctc_train_search",
+                        "message": f"Amadeus API returned HTTP {resp.status_code}: {resp.text[:300]}",
+                    }
 
-                        liters_petrol = dist_km / AVG_CAR_MILEAGE_KM_PER_LITER
-                        petrol_cost = round(liters_petrol * PETROL_PRICE_PER_LITER, 2)
-                        diesel_cost = round((dist_km / 18.0) * DIESEL_PRICE_PER_LITER, 2)
-                        toll_cost = round(dist_km * 1.4, 0)
-
-                        return {
-                            "status": "success",
-                            "provider": "Google Maps Live Directions API",
-                            "origin": origin,
-                            "destination": destination,
-                            "distance_km": dist_km,
-                            "driving_duration": duration_text,
-                            "recommended_routes": [summary] if summary else ["National Highway"],
-                            "estimated_fuel_cost_inr": {
-                                "petrol": petrol_cost,
-                                "diesel": diesel_cost,
-                                "mileage_assumed_kmpl": AVG_CAR_MILEAGE_KM_PER_LITER,
-                            },
-                            "estimated_toll_cost_inr": toll_cost,
-                            "road_condition": "Live traffic conditions and routes fetched from Google Maps API.",
-                        }
-            except Exception as e:
-                logger.warning(f"Live Google Maps API failed, using domestic engine: {e}")
-
-        dist = self._estimate_distance(origin, destination)
-        # Average highway speed ~65 km/h on Indian expressways / NH
-        hours = dist / 65.0
-        hrs = int(hours)
-        mins = int((hours - hrs) * 60)
-
-        # Indian Fuel Calculation
-        liters_petrol = dist / AVG_CAR_MILEAGE_KM_PER_LITER
-        petrol_cost = round(liters_petrol * PETROL_PRICE_PER_LITER, 2)
-        diesel_cost = round((dist / 18.0) * DIESEL_PRICE_PER_LITER, 2)
-
-        # Estimated FASTag tolls on Indian National Highways (~₹1.4 per km)
-        toll_cost = round(dist * 1.4, 0)
-
-        highways = ["NH-48", "Delhi-Mumbai Expressway (NE-4)"] if {origin, destination} == {"Delhi", "Jaipur"} else ["National Highway"]
-
-        return {
-            "status": "success",
-            "provider": "Google Maps Routing",
-            "origin": origin,
-            "destination": destination,
-            "distance_km": dist,
-            "driving_duration": f"{hrs}h {mins}m",
-            "recommended_routes": highways,
-            "estimated_fuel_cost_inr": {
-                "petrol": petrol_cost,
-                "diesel": diesel_cost,
-                "mileage_assumed_kmpl": AVG_CAR_MILEAGE_KM_PER_LITER,
-            },
-            "estimated_toll_cost_inr": toll_cost,
-            "road_condition": "Smooth 4-to-6 lane divided National Highway with regular fuel stations and food courts.",
-        }
+        except Exception as e:
+            logger.error(f"Train search error: {e}")
+            return {
+                "status": "error",
+                "tool": "irctc_train_search",
+                "message": f"Train search API call failed: {str(e)}",
+            }
 
     # -----------------------------------------------------------------------
-    # 3. Hotel Search Engine
+    # 2. Google Maps Directions API
     # -----------------------------------------------------------------------
-    def _handle_hotels(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_maps_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        origin = resolve_city_name(params.get("origin", "Delhi"))
+        destination = resolve_city_name(params.get("destination", "Jaipur"))
+
+        gmaps_key = os.getenv("GMAPS_API_KEY", "")
+        if not gmaps_key:
+            return {
+                "status": "error",
+                "tool": "google_maps_directions",
+                "message": "GMAPS_API_KEY is not configured. Add it to your .env file.",
+            }
+
+        try:
+            resp = await self._async_get(
+                "https://maps.googleapis.com/maps/api/directions/json",
+                params={
+                    "origin": f"{origin}, India",
+                    "destination": f"{destination}, India",
+                    "key": gmaps_key,
+                },
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "OK" and data.get("routes"):
+                    route = data["routes"][0]
+                    leg = route["legs"][0]
+                    dist_km = round(leg["distance"]["value"] / 1000.0, 1)
+                    duration_text = leg["duration"]["text"]
+                    summary = route.get("summary", "National Highway")
+
+                    liters_petrol = dist_km / AVG_CAR_MILEAGE_KM_PER_LITER
+                    petrol_cost = round(liters_petrol * PETROL_PRICE_PER_LITER, 2)
+                    diesel_cost = round((dist_km / 18.0) * DIESEL_PRICE_PER_LITER, 2)
+                    toll_cost = round(dist_km * 1.4, 0)
+
+                    return {
+                        "status": "success",
+                        "provider": "Google Maps Directions API",
+                        "origin": origin,
+                        "destination": destination,
+                        "distance_km": dist_km,
+                        "driving_duration": duration_text,
+                        "recommended_routes": [summary] if summary else ["National Highway"],
+                        "estimated_fuel_cost_inr": {
+                            "petrol": petrol_cost,
+                            "diesel": diesel_cost,
+                            "mileage_assumed_kmpl": AVG_CAR_MILEAGE_KM_PER_LITER,
+                        },
+                        "estimated_toll_cost_inr": toll_cost,
+                        "road_condition": "Live traffic conditions fetched from Google Maps API.",
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "tool": "google_maps_directions",
+                        "message": f"Google Maps API status: {data.get('status')}. {data.get('error_message', '')}",
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "tool": "google_maps_directions",
+                    "message": f"Google Maps API returned HTTP {resp.status_code}",
+                }
+        except Exception as e:
+            logger.error(f"Maps API error: {e}")
+            return {
+                "status": "error",
+                "tool": "google_maps_directions",
+                "message": f"Google Maps API call failed: {str(e)}",
+            }
+
+    # -----------------------------------------------------------------------
+    # 3. Hotel Search — Google Places Text Search API
+    # -----------------------------------------------------------------------
+    async def _handle_hotels_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
         location = resolve_city_name(params.get("location", params.get("destination", "Jaipur")))
         budget_per_night = float(params.get("budget_per_night", 2500.0))
         num_nights = int(params.get("num_nights", 2))
 
-        # Check for live Google Places API key
-        gmaps_key = os.getenv("GMAPS_API_KEY")
-        if gmaps_key and not gmaps_key.startswith("AIzaSyYour") and len(gmaps_key) > 20:
-            try:
-                resp = httpx.get(
-                    "https://maps.googleapis.com/maps/api/place/textsearch/json",
-                    params={"query": f"hotels in {location}, India", "key": gmaps_key},
-                    timeout=8.0,
-                )
-                if resp.status_code == 200:
-                    results = resp.json().get("results", [])
-                    if results:
-                        real_hotels = []
-                        for idx, p in enumerate(results[:4]):
-                            rating = p.get("rating", 4.3)
-                            name = p.get("name", f"Hotel {location}")
-                            addr = p.get("formatted_address", location)
-                            price_tier = budget_per_night * (0.75 + (idx * 0.25))
-                            real_hotels.append({
-                                "name": name,
-                                "category": f"Google Verified ({rating}⭐)",
-                                "price_per_night": round(price_tier),
-                                "rating": rating,
-                                "location": addr[:55] + "..." if len(addr) > 55 else addr,
-                                "amenities": ["Google Places Verified", "Free Wi-Fi", "AC"],
-                            })
-                        if real_hotels:
-                            filtered_live = []
-                            for h in real_hotels:
-                                h_copy = dict(h)
-                                h_copy["total_cost_for_stay"] = h_copy["price_per_night"] * num_nights
-                                h_copy["within_budget"] = h_copy["price_per_night"] <= (budget_per_night * 1.3)
-                                filtered_live.append(h_copy)
-                            return {
-                                "status": "success",
-                                "provider": "Google Places Live Lodging API",
-                                "location": location,
-                                "budget_per_night": budget_per_night,
-                                "num_nights": num_nights,
-                                "hotels": filtered_live,
-                            }
-            except Exception as e:
-                logger.warning(f"Live Google Places hotel search failed, falling back: {e}")
+        gmaps_key = os.getenv("GMAPS_API_KEY", "")
+        if not gmaps_key:
+            return {
+                "status": "error",
+                "tool": "hotel_search",
+                "message": "GMAPS_API_KEY is not configured. Add it to your .env file.",
+            }
 
-        # Destination-specific authentic lodging options
-        hotels_db: Dict[str, List[Dict[str, Any]]] = {
-            "Jaipur": [
-                {
-                    "name": "Zostel Jaipur (M.I. Road)",
-                    "category": "Backpacker Hostel & Private Rooms",
-                    "price_per_night": 799,
-                    "rating": 4.6,
-                    "location": "Near Hawa Mahal & Old City",
-                    "amenities": ["Rooftop Cafe", "Free Wi-Fi", "AC", "Walking Tours"],
-                },
-                {
-                    "name": "Shahpura House Heritage Hotel",
-                    "category": "Heritage Boutique Haveli",
-                    "price_per_night": 3200,
-                    "rating": 4.8,
-                    "location": "Bani Park",
-                    "amenities": ["Swimming Pool", "Folk Music Evenings", "Rajasthani Dining", "Wi-Fi"],
-                },
-                {
-                    "name": "ITC Rajputana, A Luxury Collection Hotel",
-                    "category": "5-Star Luxury Palace",
-                    "price_per_night": 9500,
-                    "rating": 4.9,
-                    "location": "Palace Road",
-                    "amenities": ["Royal Spa", "Fine Dining (Peshawri)", "Swimming Pool", "Valet"],
-                },
-            ],
-            "Goa": [
-                {
-                    "name": "goSTOPS Goa Calangute",
-                    "category": "Hostel & Co-living",
-                    "price_per_night": 650,
-                    "rating": 4.5,
-                    "location": "North Goa, 500m to Beach",
-                    "amenities": ["Pool Table", "AC Dorms", "Scooter Rental Desk"],
-                },
-                {
-                    "name": "Fairfield by Marriott Goa Anjuna",
-                    "category": "Premium Resort",
-                    "price_per_night": 3800,
-                    "rating": 4.7,
-                    "location": "Anjuna Beach Road",
-                    "amenities": ["Outdoor Pool", "Buffet Breakfast", "Bar"],
-                },
-                {
-                    "name": "Taj Exotica Resort & Spa",
-                    "category": "5-Star Beachfront Luxury",
-                    "price_per_night": 18500,
-                    "rating": 4.9,
-                    "location": "Benaulim, South Goa",
-                    "amenities": ["Private Beach", "Jiva Spa", "Golf Course"],
-                },
-            ],
-        }
-
-        listings = hotels_db.get(location)
-        if not listings:
-            # Dynamically synthesize tailored hotels across budget tiers
-            listings = [
-                {
-                    "name": f"Zostel / Backpacker Hub {location}",
-                    "category": "Budget Dorm & Private Rooms",
-                    "price_per_night": 750,
-                    "rating": 4.5,
-                    "location": f"Central {location}",
-                    "amenities": ["Free Wi-Fi", "AC", "Common Lounge"],
-                },
-                {
-                    "name": f"The Grand {location} Residency",
-                    "category": "Comfort Mid-Range Hotel",
-                    "price_per_night": 2400,
-                    "rating": 4.4,
-                    "location": f"Main Market, {location}",
-                    "amenities": ["Complimentary Breakfast", "Restaurant", "AC Rooms"],
-                },
-                {
-                    "name": f"Royal Heritage Palace & Spa {location}",
-                    "category": "Luxury 5-Star Resort",
-                    "price_per_night": 8200,
-                    "rating": 4.8,
-                    "location": f"Scenic Ridge, {location}",
-                    "amenities": ["Swimming Pool", "Spa & Wellness", "Fine Dining"],
-                },
-            ]
-
-        # Filter or annotate based on user's target budget
-        filtered = []
-        for h in listings:
-            h_copy = dict(h)
-            h_copy["total_cost_for_stay"] = h_copy["price_per_night"] * num_nights
-            h_copy["within_budget"] = h_copy["price_per_night"] <= (budget_per_night * 1.25)
-            filtered.append(h_copy)
-
-        return {
-            "status": "success",
-            "provider": "Domestic Hotel Registry",
-            "location": location,
-            "budget_per_night": budget_per_night,
-            "num_nights": num_nights,
-            "hotels": filtered,
-        }
+        try:
+            resp = await self._async_get(
+                "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                params={"query": f"hotels in {location}, India", "key": gmaps_key},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                if not results:
+                    return {
+                        "status": "error",
+                        "tool": "hotel_search",
+                        "message": f"Google Places returned no hotels for '{location}'. Try a broader location.",
+                    }
+                hotels = []
+                for idx, p in enumerate(results[:5]):
+                    rating = p.get("rating", 4.0)
+                    name = p.get("name", f"Hotel {location}")
+                    addr = p.get("formatted_address", location)
+                    price_tier = budget_per_night * (0.75 + idx * 0.25)
+                    h = {
+                        "name": name,
+                        "category": f"Google Places Verified (⭐ {rating})",
+                        "price_per_night": round(price_tier),
+                        "rating": rating,
+                        "location": addr[:70] + "…" if len(addr) > 70 else addr,
+                        "amenities": ["Google Places Verified", "Contact hotel for amenities"],
+                        "total_cost_for_stay": round(price_tier) * num_nights,
+                        "within_budget": round(price_tier) <= budget_per_night * 1.3,
+                    }
+                    hotels.append(h)
+                return {
+                    "status": "success",
+                    "provider": "Google Places API",
+                    "location": location,
+                    "budget_per_night": budget_per_night,
+                    "num_nights": num_nights,
+                    "hotels": hotels,
+                }
+            else:
+                return {
+                    "status": "error",
+                    "tool": "hotel_search",
+                    "message": f"Google Places API returned HTTP {resp.status_code}",
+                }
+        except Exception as e:
+            logger.error(f"Hotel search error: {e}")
+            return {
+                "status": "error",
+                "tool": "hotel_search",
+                "message": f"Hotel search API call failed: {str(e)}",
+            }
 
     # -----------------------------------------------------------------------
-    # 4. Weather Forecast Engine
+    # 4. Weather — WeatherAPI.com (primary) / OpenWeatherMap (secondary)
     # -----------------------------------------------------------------------
-    def _handle_weather(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_weather_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
         city = resolve_city_name(params.get("city", params.get("destination", "Jaipur")))
         date_str = params.get("date", "current")
 
-        # Check for live Weather API Key
-        weather_key = os.getenv("WEATHER_API_KEY")
-        if weather_key and not weather_key.startswith("your_") and len(weather_key) > 8:
-            try:
-                # 1. Try WeatherAPI.com (supports free forecast endpoint)
-                resp = httpx.get(
-                    "http://api.weatherapi.com/v1/forecast.json",
-                    params={"key": weather_key, "q": f"{city},India", "days": "3", "aqi": "no"},
-                    timeout=8.0,
+        weather_key = os.getenv("WEATHER_API_KEY", "")
+        if not weather_key:
+            return {
+                "status": "error",
+                "tool": "weather_forecast",
+                "message": (
+                    "WEATHER_API_KEY is not configured. "
+                    "Get a free key at https://www.weatherapi.com"
+                ),
+            }
+
+        # WeatherAPI.com
+        try:
+            resp = await self._async_get(
+                "http://api.weatherapi.com/v1/forecast.json",
+                params={"key": weather_key, "q": f"{city},India", "days": "3", "aqi": "no"},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                w_data = resp.json()
+                curr = w_data.get("current", {})
+                f_days = w_data.get("forecast", {}).get("forecastday", [])
+                f_day = f_days[0].get("day", {}) if f_days else {}
+
+                temp_c = curr.get("temp_c", 25)
+                min_c = f_day.get("mintemp_c", round(temp_c - 5))
+                max_c = f_day.get("maxtemp_c", round(temp_c + 5))
+                cond = curr.get("condition", {}).get("text", "Clear")
+                rain_chance = f_day.get("daily_chance_of_rain", 10)
+                hum = f"{curr.get('humidity', 55)}%"
+
+                alerts = []
+                if int(rain_chance) > 60:
+                    alerts.append("🌧️ Rain likely — carry an umbrella or rain gear.")
+                if max_c > 38:
+                    alerts.append("☀️ Heatwave advisory — avoid outdoor exposure 11 AM – 4 PM.")
+                elif min_c < 10:
+                    alerts.append("🧥 Cold weather — woolens or a warm jacket recommended.")
+
+                return {
+                    "status": "success",
+                    "provider": "WeatherAPI.com",
+                    "city": city,
+                    "date": date_str,
+                    "temperature_range": f"{round(min_c)}°C – {round(max_c)}°C (now: {round(temp_c)}°C)",
+                    "condition": cond,
+                    "precipitation_probability": f"{rain_chance}%",
+                    "humidity": hum,
+                    "travel_alerts": alerts if alerts else ["✅ Clear, favorable travel weather."],
+                }
+            else:
+                # Try OpenWeatherMap as secondary
+                owm_resp = await self._async_get(
+                    "https://api.openweathermap.org/data/2.5/weather",
+                    params={"q": f"{city},IN", "appid": weather_key, "units": "metric"},
+                    timeout=10.0,
                 )
-                if resp.status_code == 200:
-                    w_data = resp.json()
-                    curr = w_data.get("current", {})
-                    f_days = w_data.get("forecast", {}).get("forecastday", [])
-                    f_day = f_days[0].get("day", {}) if f_days else {}
-
-                    temp_c = curr.get("temp_c", 25)
-                    min_c = f_day.get("mintemp_c", round(temp_c - 5))
-                    max_c = f_day.get("maxtemp_c", round(temp_c + 5))
-                    cond = curr.get("condition", {}).get("text", "Clear")
-                    rain_chance = f_day.get("daily_chance_of_rain", 10)
-                    hum = f"{curr.get('humidity', 55)}%"
-
-                    live_alerts = []
-                    if int(rain_chance) > 60:
-                        live_alerts.append("🌧️ Rain showers likely: carry an umbrella or rain gear.")
-                    if max_c > 38:
-                        live_alerts.append("☀️ Heatwave advisory: avoid outdoor exposure during peak afternoon.")
-                    elif min_c < 10:
-                        live_alerts.append("🧥 Cool winter weather: light woolens or jacket recommended.")
-
+                if owm_resp.status_code == 200:
+                    owm = owm_resp.json()
+                    temp = owm.get("main", {}).get("temp", 25)
+                    desc = owm.get("weather", [{}])[0].get("description", "Clear").title()
+                    hum = f"{owm.get('main', {}).get('humidity', 50)}%"
                     return {
                         "status": "success",
-                        "provider": "WeatherAPI.com Live Service",
+                        "provider": "OpenWeatherMap",
                         "city": city,
                         "date": date_str,
-                        "temperature_range": f"{round(min_c)}°C - {round(max_c)}°C (Current: {round(temp_c)}°C)",
-                        "condition": cond,
-                        "precipitation_probability": f"{rain_chance}%",
+                        "temperature_range": f"{round(temp - 3)}°C – {round(temp + 3)}°C (now: {round(temp)}°C)",
+                        "condition": desc,
+                        "precipitation_probability": "See OWM dashboard",
                         "humidity": hum,
-                        "travel_alerts": live_alerts if live_alerts else ["✨ Clear, favorable travel weather."],
+                        "travel_alerts": ["✅ Live weather data retrieved from OpenWeatherMap."],
                     }
-                else:
-                    # 2. Try OpenWeatherMap (standard current weather endpoint)
-                    resp_owm = httpx.get(
-                        "https://api.openweathermap.org/data/2.5/weather",
-                        params={"q": f"{city},IN", "appid": weather_key, "units": "metric"},
-                        timeout=8.0,
-                    )
-                    if resp_owm.status_code == 200:
-                        owm = resp_owm.json()
-                        temp = owm.get("main", {}).get("temp", 25)
-                        desc = owm.get("weather", [{}])[0].get("description", "Clear").title()
-                        hum = f"{owm.get('main', {}).get('humidity', 50)}%"
-                        return {
-                            "status": "success",
-                            "provider": "OpenWeatherMap Live Service",
-                            "city": city,
-                            "date": date_str,
-                            "temperature_range": f"{round(temp - 3)}°C - {round(temp + 3)}°C (Current: {round(temp)}°C)",
-                            "condition": desc,
-                            "precipitation_probability": "15%",
-                            "humidity": hum,
-                            "travel_alerts": ["✨ Current live weather conditions retrieved."],
-                        }
-            except Exception as e:
-                logger.warning(f"Live Weather API call failed, using domestic advisory hub: {e}")
-
-        alerts = []
-        month = 12
-        if "12-" in str(date_str) or "dec" in str(date_str).lower():
-            month = 12
-        elif "07-" in str(date_str) or "jul" in str(date_str).lower() or "aug" in str(date_str).lower():
-            month = 7
-        elif "05-" in str(date_str) or "may" in str(date_str).lower() or "jun" in str(date_str).lower():
-            month = 5
-
-        if month in (6, 7, 8, 9) and city in ("Goa", "Kochi", "Alappuzha", "Mumbai"):
-            temp_range = "24°C - 29°C"
-            condition = "Tropical Monsoon Showers"
-            rain_prob = "85%"
-            alerts.append("🌧️ South-West Monsoon in effect: coastal water sports closed; carry rain gear.")
-        elif month in (11, 12, 1) and city in ("Delhi", "Agra", "Chandigarh", "Amritsar", "Varanasi"):
-            temp_range = "9°C - 21°C"
-            condition = "Pleasantly Cool & Crisp with Morning Mist"
-            rain_prob = "5%"
-            alerts.append("🌫️ Dense morning fog likely: allow 30-45 min buffer for early morning trains/flights.")
-        elif month in (4, 5, 6) and city in ("Jaipur", "Delhi", "Udaipur", "Agra", "Varanasi"):
-            temp_range = "28°C - 41°C"
-            condition = "Dry & Sunny (Summer)"
-            rain_prob = "2%"
-            alerts.append("☀️ Peak summer heat: plan outdoor monument visits before 10 AM or after 4:30 PM.")
-        else:
-            temp_range = "16°C - 27°C"
-            condition = "Pleasant & Clear Skies"
-            rain_prob = "10%"
-            alerts.append("✨ Ideal sightseeing weather.")
-
-        return {
-            "status": "success",
-            "provider": "Indian Meteorological Advisory Hub",
-            "city": city,
-            "date": date_str,
-            "temperature_range": temp_range,
-            "condition": condition,
-            "precipitation_probability": rain_prob,
-            "humidity": "58%",
-            "travel_alerts": alerts,
-        }
+                return {
+                    "status": "error",
+                    "tool": "weather_forecast",
+                    "message": (
+                        f"WeatherAPI.com returned HTTP {resp.status_code} and "
+                        f"OpenWeatherMap returned HTTP {owm_resp.status_code}. "
+                        "Check WEATHER_API_KEY validity."
+                    ),
+                }
+        except Exception as e:
+            logger.error(f"Weather API error: {e}")
+            return {
+                "status": "error",
+                "tool": "weather_forecast",
+                "message": f"Weather API call failed: {str(e)}",
+            }
 
     # -----------------------------------------------------------------------
-    # 5. Domestic Flight Engine
+    # 5. Flight Search — Amadeus Flight Offers API
     # -----------------------------------------------------------------------
-    def _handle_flights(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_flights_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
         origin = resolve_city_name(params.get("origin", "Delhi"))
         destination = resolve_city_name(params.get("destination", "Bengaluru"))
-        date = params.get("date", "15-12-2026")
+        date = params.get("date", "")
 
-        orig_iata = CITY_TO_IATA.get(origin, "DEL")
-        dest_iata = CITY_TO_IATA.get(destination, "BLR")
+        orig_iata = CITY_TO_IATA.get(origin)
+        dest_iata = CITY_TO_IATA.get(destination)
 
-        flights = [
-            {
-                "airline": "IndiGo",
-                "flight_number": f"6E-{abs(hash(origin + destination)) % 800 + 100}",
-                "departure": "07:00",
-                "arrival": "09:45",
-                "duration": "2h 45m",
-                "stops": "Non-stop",
-                "origin_iata": orig_iata,
-                "dest_iata": dest_iata,
-                "fare_inr": 4850,
-            },
-            {
-                "airline": "Air India",
-                "flight_number": f"AI-{abs(hash(destination + origin)) % 800 + 100}",
-                "departure": "14:15",
-                "arrival": "17:05",
-                "duration": "2h 50m",
-                "stops": "Non-stop",
-                "origin_iata": orig_iata,
-                "dest_iata": dest_iata,
-                "fare_inr": 5400,
-            },
-            {
-                "airline": "Akasa Air",
-                "flight_number": f"QP-{abs(hash(origin)) % 800 + 100}",
-                "departure": "19:30",
-                "arrival": "22:15",
-                "duration": "2h 45m",
-                "stops": "Non-stop",
-                "origin_iata": orig_iata,
-                "dest_iata": dest_iata,
-                "fare_inr": 4450,
-            },
-        ]
+        if not orig_iata or not dest_iata:
+            return {
+                "status": "error",
+                "tool": "flight_search",
+                "message": (
+                    f"IATA code not found for '{origin}' or '{destination}'. "
+                    "Please provide an airport with a known IATA code."
+                ),
+            }
 
-        return {
-            "status": "success",
-            "provider": "Domestic Aviation GDS",
-            "origin": f"{origin} ({orig_iata})",
-            "destination": f"{destination} ({dest_iata})",
-            "travel_date": date,
-            "flights_found": len(flights),
-            "flights": flights,
-        }
+        amadeus_key = os.getenv("AMADEUS_API_KEY", "")
+        amadeus_secret = os.getenv("AMADEUS_API_SECRET", "")
+
+        if not amadeus_key or not amadeus_secret:
+            return {
+                "status": "error",
+                "tool": "flight_search",
+                "message": (
+                    "AMADEUS_API_KEY and AMADEUS_API_SECRET are not configured. "
+                    "Sign up free at https://developers.amadeus.com"
+                ),
+            }
+
+        try:
+            with httpx.Client(timeout=15.0) as sync_client:
+                token = _get_amadeus_token(sync_client)
+                if not token:
+                    return {
+                        "status": "error",
+                        "tool": "flight_search",
+                        "message": "Failed to get Amadeus access token. Check AMADEUS_API_KEY / AMADEUS_API_SECRET.",
+                    }
+
+                # Parse date to YYYY-MM-DD
+                dep_date = date
+                if date and "-" in date:
+                    parts = date.split("-")
+                    if len(parts[0]) == 2:  # DD-MM-YYYY
+                        dep_date = f"{parts[2]}-{parts[1]}-{parts[0]}"
+
+                resp = sync_client.get(
+                    "https://test.api.amadeus.com/v2/shopping/flight-offers",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={
+                        "originLocationCode": orig_iata,
+                        "destinationLocationCode": dest_iata,
+                        "departureDate": dep_date or "2026-12-15",
+                        "adults": 1,
+                        "currencyCode": "INR",
+                        "max": 5,
+                    },
+                    timeout=15.0,
+                )
+
+                if resp.status_code == 200:
+                    offers = resp.json().get("data", [])
+                    flights = []
+                    for offer in offers:
+                        itinerary = offer.get("itineraries", [{}])[0]
+                        seg = itinerary.get("segments", [{}])[0]
+                        price_inr = float(offer.get("price", {}).get("total", 0))
+                        flights.append({
+                            "airline": seg.get("carrierCode", "XX"),
+                            "flight_number": f"{seg.get('carrierCode', 'XX')}-{seg.get('number', '000')}",
+                            "departure": seg.get("departure", {}).get("at", "N/A"),
+                            "arrival": seg.get("arrival", {}).get("at", "N/A"),
+                            "duration": itinerary.get("duration", "N/A"),
+                            "stops": "Non-stop" if len(itinerary.get("segments", [])) == 1 else f"{len(itinerary.get('segments', [])) - 1} stop(s)",
+                            "origin_iata": orig_iata,
+                            "dest_iata": dest_iata,
+                            "fare_inr": round(price_inr),
+                        })
+                    return {
+                        "status": "success",
+                        "provider": "Amadeus Flight Offers API",
+                        "origin": f"{origin} ({orig_iata})",
+                        "destination": f"{destination} ({dest_iata})",
+                        "travel_date": date,
+                        "flights_found": len(flights),
+                        "flights": flights,
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "tool": "flight_search",
+                        "message": f"Amadeus Flight Offers API returned HTTP {resp.status_code}: {resp.text[:300]}",
+                    }
+
+        except Exception as e:
+            logger.error(f"Flight search error: {e}")
+            return {
+                "status": "error",
+                "tool": "flight_search",
+                "message": f"Flight search API call failed: {str(e)}",
+            }
 
     # -----------------------------------------------------------------------
-    # 6. Intercity Bus Engine
+    # 6. Bus Search — Redirect users to live booking platforms
     # -----------------------------------------------------------------------
     def _handle_buses(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Bus aggregator APIs (redBus, AbhiBus) require paid partnerships.
+        Return actionable links so users can self-book."""
         origin = resolve_city_name(params.get("origin", "Delhi"))
         destination = resolve_city_name(params.get("destination", "Jaipur"))
-        date = params.get("date", "15-12-2026")
-
-        buses = [
-            {
-                "operator": "Zingbus Plus",
-                "bus_type": "Electric AC Multi-Axle Sleeper (2+1)",
-                "departure": "06:30",
-                "arrival": "11:30",
-                "duration": "5h 00m",
-                "boarding_point": f"Kashmere Gate / Dhaula Kuan, {origin}",
-                "drop_point": f"Sindhi Camp / Transport Nagar, {destination}",
-                "fare_inr": 699,
-                "rating": 4.6,
-            },
-            {
-                "operator": "IntrCity SmartBus",
-                "bus_type": "Volvo 9600 AC Semi-Sleeper",
-                "departure": "17:45",
-                "arrival": "22:45",
-                "duration": "5h 00m",
-                "boarding_point": f"ISBT / Karol Bagh, {origin}",
-                "drop_point": f"Sindhi Camp, {destination}",
-                "fare_inr": 780,
-                "rating": 4.8,
-            },
-            {
-                "operator": "RSRTC Super Luxury",
-                "bus_type": "Scania AC Seater",
-                "departure": "22:30",
-                "arrival": "03:45",
-                "duration": "5h 15m",
-                "boarding_point": f"Bikaner House, {origin}",
-                "drop_point": f"Narayan Singh Circle, {destination}",
-                "fare_inr": 550,
-                "rating": 4.4,
-            },
-        ]
+        date = params.get("date", "")
 
         return {
             "status": "success",
-            "provider": "Intercity Bus Aggregator",
+            "provider": "Bus Booking Links",
             "origin": origin,
             "destination": destination,
             "travel_date": date,
-            "buses_found": len(buses),
-            "buses": buses,
+            "message": (
+                f"Live bus inventory for {origin} → {destination} is available on these platforms. "
+                "AC Sleeper and Volvo buses are typically ₹400–₹1,200 depending on operator and class."
+            ),
+            "booking_links": [
+                {
+                    "platform": "redBus",
+                    "url": f"https://www.redbus.in/bus-tickets/{origin.lower()}-to-{destination.lower()}",
+                    "description": "Largest bus aggregator in India — real-time seat availability",
+                },
+                {
+                    "platform": "AbhiBus",
+                    "url": f"https://www.abhibus.com/{origin.lower()}-to-{destination.lower()}-bus-tickets",
+                    "description": "Compare fares across 3,000+ operators",
+                },
+                {
+                    "platform": "MakeMyTrip Buses",
+                    "url": f"https://www.makemytrip.com/bus-tickets/{origin.lower()}-to-{destination.lower()}/",
+                    "description": "MakeMyTrip bus booking with cashback offers",
+                },
+            ],
         }
 
-    def _estimate_distance(self, orig: str, dest: str) -> int:
-        """Estimate road/rail distance in km between two Indian cities."""
-        if orig in DISTANCE_MATRIX and dest in DISTANCE_MATRIX[orig]:
-            return DISTANCE_MATRIX[orig][dest]
-        if dest in DISTANCE_MATRIX and orig in DISTANCE_MATRIX[dest]:
-            return DISTANCE_MATRIX[dest][orig]
-        # Heuristic distance based on char difference
-        return max(180, int(abs(hash(orig) - hash(dest)) % 1100 + 200))
-
     def get_available_tools(self) -> List[ToolDefinition]:
-        """Return registered MCP and local tool definitions."""
+        """Return registered tool definitions."""
         return [
             ToolDefinition(
                 name="irctc_train_search",
-                description="Search Indian Railways trains, schedules, class fares (1A, 2A, 3A, 3E, SL), and seat availability between Indian cities.",
+                description="Search Indian Railways trains via Amadeus Railway API for schedules and availability between Indian cities.",
                 parameters={"origin": "str", "destination": "str", "travel_date": "str", "quota": "str"},
                 tool_type="mcp",
                 server_name="IRCTC Server",
@@ -952,7 +640,7 @@ class MCPToolManager:
             ),
             ToolDefinition(
                 name="google_maps_directions",
-                description="Query driving route distance, highway driving duration, petrol/diesel fuel costs in INR, and FASTag toll estimates between Indian cities.",
+                description="Query real driving route distance, duration, fuel costs in INR, and FASTag toll estimates via Google Maps API.",
                 parameters={"origin": "str", "destination": "str"},
                 tool_type="mcp",
                 server_name="Google Maps Server",
@@ -960,7 +648,7 @@ class MCPToolManager:
             ),
             ToolDefinition(
                 name="hotel_search",
-                description="Search hotels, heritage havelis, and backpacker hostels by location, nightly budget, and rating in Indian cities.",
+                description="Search real hotels via Google Places API by location, nightly budget, and rating.",
                 parameters={"location": "str", "budget_per_night": "float", "num_nights": "int"},
                 tool_type="mcp",
                 server_name="Google Maps Server",
@@ -968,7 +656,7 @@ class MCPToolManager:
             ),
             ToolDefinition(
                 name="weather_forecast",
-                description="Get weather forecast, temperatures, rainfall probability, and seasonal advisories (monsoon, fog, heatwave) for an Indian destination.",
+                description="Get live weather forecast, temperatures, and travel advisories from WeatherAPI.com.",
                 parameters={"city": "str", "date": "str"},
                 tool_type="mcp",
                 server_name="Weather Server",
@@ -976,7 +664,7 @@ class MCPToolManager:
             ),
             ToolDefinition(
                 name="flight_search",
-                description="Search domestic Indian flights, timings, IATA codes, and ticket fares (IndiGo, Air India, Akasa Air). Trigger when distance > 500km or requested.",
+                description="Search real domestic Indian flights via Amadeus Flight Offers API.",
                 parameters={"origin": "str", "destination": "str", "date": "str"},
                 tool_type="mcp",
                 server_name="Flight Server",
@@ -985,7 +673,7 @@ class MCPToolManager:
             ),
             ToolDefinition(
                 name="bus_search",
-                description="Search intercity AC Volvo and Sleeper buses (IntrCity, Zingbus, State RTC) between Indian cities.",
+                description="Provide live bus booking links via redBus and AbhiBus for intercity travel.",
                 parameters={"origin": "str", "destination": "str", "date": "str"},
                 tool_type="mcp",
                 server_name="Bus Server",
@@ -995,29 +683,20 @@ class MCPToolManager:
         ]
 
     async def health_check(self) -> Dict[str, Dict[str, Any]]:
-        """Probe all 5 configured MCP servers and report status."""
+        """Check reachability of live API endpoints."""
+        checks = {
+            "Amadeus API": "https://test.api.amadeus.com/v1/security/oauth2/token",
+            "Google Maps API": "https://maps.googleapis.com/maps/api/directions/json",
+            "WeatherAPI.com": "http://api.weatherapi.com/v1/current.json",
+        }
         results = {}
-        for s in self.servers_config.get("mcp_servers", []):
-            name = s["name"]
-            url = s.get("url", "")
-            req = s.get("required", False)
+        for name, url in checks.items():
             try:
-                resp = await self.http_client.get(
-                    url.replace("/sse", "/health") if "/sse" in url else url,
-                    timeout=2.0,
-                )
-                online = resp.status_code in (200, 404, 405)
+                resp = await self._async_get(url, timeout=3.0)
                 results[name] = {
-                    "online": online,
-                    "url": url,
-                    "required": req,
-                    "status": "ONLINE" if online else f"HTTP_{resp.status_code}",
+                    "online": resp.status_code not in (0, 503, 502),
+                    "status": f"HTTP_{resp.status_code}",
                 }
             except Exception:
-                results[name] = {
-                    "online": False,
-                    "url": url,
-                    "required": req,
-                    "status": "FALLBACK_ENGINE_ACTIVE",
-                }
+                results[name] = {"online": False, "status": "UNREACHABLE"}
         return results

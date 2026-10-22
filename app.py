@@ -356,14 +356,14 @@ with st.sidebar:
 
     # 4. Tool Inventory & Health Indicators
     with st.expander("🛠️ Tool Inventory & Health", expanded=False):
-        st.markdown("• 🟢 **IRCTC Trains** (`train_search`) — Active")
-        st.markdown("• 🟢 **Google Maps** (`get_directions`, `hotel_search`) — Active")
-        st.markdown("• 🟢 **Weather Server** (`get_forecast`) — Active")
-        st.markdown("• 🟢 **Bus Server** (`search_buses`) — Active")
-        st.markdown("• 🟢 **Flight Server** (`search_flights`) — Active")
-        st.markdown("• 🟢 **ChromaDB RAG** (`rag_search`) — Active")
-        st.markdown("• 🟢 **Gemini 1.5 Pro** (`gemini_strategy`) — Active")
-        st.caption("All domestic tools ready with offline/test fallback support.")
+        st.markdown("• 🟢 **IRCTC Trains** (`train_search`) — Live Amadeus Rail API")
+        st.markdown("• 🟢 **Google Maps** (`get_directions`, `hotel_search`) — Live Google Maps & Places")
+        st.markdown("• 🟢 **Weather Server** (`get_forecast`) — Live WeatherAPI")
+        st.markdown("• 🟢 **Bus Server** (`search_buses`) — Live Bus Booking Links")
+        st.markdown("• 🟢 **Flight Server** (`search_flights`) — Live Amadeus Flight API")
+        st.markdown("• 🟢 **ChromaDB RAG** (`rag_search`) — Google Gemini Embeddings")
+        st.markdown("• 🟢 **Gemini Reasoning** (`gemini_strategy`) — Google Gemini 2.5 Flash")
+        st.caption("All domestic tools query live external APIs with pure real-time data.")
 
     # 5. Quick Starter Queries
     st.divider()
@@ -390,9 +390,9 @@ st.markdown('<div class="main-title">🌍 Yatra AI — Travel Planner</div>', un
 st.markdown(
     '<div class="sub-title">Intelligent Domestic Travel Planning for India | '
     '<span class="badge-phase">LangGraph Core</span>'
-    '<span class="badge-rag">ChromaDB ONNX RAG</span>'
-    '<span class="badge-mcp">Groq Llama 3.3 70B</span>'
-    '<span class="badge-gemini">Dual-Model Gemini 1.5 Pro</span>'
+    '<span class="badge-rag">Gemini Embeddings RAG</span>'
+    '<span class="badge-mcp">Groq / Gemini LLM</span>'
+    '<span class="badge-gemini">Live APIs & MCP</span>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -401,21 +401,20 @@ st.markdown(
 from yatra_agent.core.llm_factory import get_active_llm_info
 llm_info = get_active_llm_info()
 google_key = os.getenv("GOOGLE_API_KEY", "")
-has_live_keys = bool(llm_info["status"] != "LOCAL_FALLBACK_ACTIVE" or (google_key and len(google_key) > 20))
+is_online = bool(llm_info["status"] != "OFFLINE_NO_API_KEY")
 
-if not has_live_keys:
+if not is_online:
     st.markdown(
         '<div class="caution-banner">'
-        'ℹ️ <strong>Domestic Fallback Engine Active:</strong> '
-        'Running with deterministic local MCP engines, local ONNX ChromaDB RAG, and high-reasoning fallback strategist. '
-        'Add your free <code>GROQ_API_KEY</code> and <code>GOOGLE_API_KEY</code> in <code>.env</code> to enable live online inference!'
+        '⚠️ <strong>Live Inference Offline:</strong> '
+        'No valid LLM API key detected. Please configure <code>GROQ_API_KEY</code> or <code>GOOGLE_API_KEY</code> in your <code>.env</code> file to enable live planning.'
         '</div>',
         unsafe_allow_html=True,
     )
 else:
     st.markdown(
         f'<div style="background-color: #e6f4ea; border-left: 4px solid #137333; padding: 10px 14px; border-radius: 6px; font-size: 0.88rem; color: #1e4620; margin-bottom: 1rem;">'
-        f'⚡ <strong>Live Fast Inference Online:</strong> Primary LLM: <strong>{llm_info["provider"]} ({llm_info["model"]})</strong> | Reasoning Engine: <strong>Gemini 1.5 Pro</strong>'
+        f'⚡ <strong>Live Fast Inference Online:</strong> Primary LLM: <strong>{llm_info["provider"]} ({llm_info["model"]})</strong> | Live APIs: <strong>Google Maps, Places, WeatherAPI, Amadeus</strong>'
         '</div>',
         unsafe_allow_html=True,
     )

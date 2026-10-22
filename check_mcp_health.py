@@ -34,7 +34,7 @@ async def check_server(server: dict) -> dict:
             status = "✅ ONLINE (Live SSE)" if resp.status_code in (200, 404, 405) else f"⚠️ HTTP {resp.status_code}"
     except Exception:
         latency_ms = int((time.time() - start_time) * 1000)
-        status = "🛡️ FALLBACK ACTIVE (Domestic Engine Ready)"
+        status = "⚠️ ENDPOINT OFFLINE (Direct Live APIs Active)"
 
     return {
         "name": name,

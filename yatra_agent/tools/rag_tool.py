@@ -1,4 +1,12 @@
-"""ChromaDB RAG Tool for Indian travel knowledge retrieval."""
+"""ChromaDB RAG Tool — Google Gemini Embeddings (production).
+
+Uses GoogleGenerativeAiEmbeddingFunction (via chromadb.utils.embedding_functions)
+with the GOOGLE_API_KEY already configured in the environment.
+
+No offline / deterministic fallback embedding functions are included.
+If GOOGLE_API_KEY is missing, initialization raises a clear error so the
+operator can fix the configuration.
+"""
 
 import csv
 import hashlib
@@ -10,13 +18,12 @@ from typing import Any, Dict, List, Optional
 import chromadb
 from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings as ChromaSettings
+from chromadb import EmbeddingFunction
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from yatra_agent.config.settings import (
     CHROMA_PERSIST_DIR,
-    EMBEDDING_DIMENSIONS,
-    EMBEDDING_MODEL,
     RAG_CHUNK_OVERLAP,
     RAG_CHUNK_SIZE,
     RAG_TOP_K,
@@ -26,91 +33,46 @@ from yatra_agent.config.settings import (
 logger = logging.getLogger("yatra_ai.rag")
 
 
-from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+class GeminiEmbeddingFunction(EmbeddingFunction):
+    """Google Gemini embedding function using official google.genai SDK."""
+
+    def __init__(self, api_key: str, model_name: str = "models/gemini-embedding-001"):
+        from google import genai
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+
+    def __call__(self, input: Any) -> Any:
+        if not input:
+            return []
+        resp = self.client.models.embed_content(
+            model=self.model_name,
+            contents=list(input),
+        )
+        return [e.values for e in resp.embeddings]
+
+    def embed_query(self, input: Any) -> Any:
+        return self(input)
+
+    def embed_documents(self, input: Any) -> Any:
+        return self(input)
 
 
-STOPWORDS = {
-    "what", "are", "the", "in", "for", "is", "a", "an", "and", "or", "to", "of",
-    "on", "with", "at", "by", "from", "how", "tell", "me", "about", "can", "i",
-    "you", "do", "does", "did", "this", "that", "these", "those", "there", "where",
-}
+def _get_embedding_function() -> GeminiEmbeddingFunction:
+    """Return a Google Gemini embedding function.
 
-
-try:
-    from chromadb.api.collection_configuration import register_embedding_function
-except ImportError:
-    register_embedding_function = lambda cls: cls
-
-
-@register_embedding_function
-class DeterministicLocalEmbeddingFunction(EmbeddingFunction[Documents]):
-    """Fast, deterministic word-hash embedding function for offline/test environments."""
-
-    def __init__(self, dimensions: int = EMBEDDING_DIMENSIONS):
-        self.dimensions = dimensions
-
-    def __call__(self, input: Documents) -> Embeddings:
-        import re
-        embeddings = []
-        for text in input:
-            vec = [0.0] * self.dimensions
-            clean_text = re.sub(r"[^\w\s]", " ", text.lower())
-            words = [w for w in clean_text.split() if w not in STOPWORDS]
-            if not words:
-                words = clean_text.split()
-            if not words:
-                embeddings.append(vec)
-                continue
-            for word in words:
-                idx = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16) % self.dimensions
-                vec[idx] += 1.0
-
-            norm = sum(x * x for x in vec) ** 0.5
-            if norm > 0:
-                vec = [x / norm for x in vec]
-            embeddings.append(vec)
-        return embeddings
-
-    @staticmethod
-    def name() -> str:
-        return "deterministic_local"
-
-    def get_config(self) -> Dict[str, Any]:
-        return {"dimensions": self.dimensions}
-
-    @staticmethod
-    def build_from_config(config: Dict[str, Any]) -> "DeterministicLocalEmbeddingFunction":
-        return DeterministicLocalEmbeddingFunction(dimensions=config.get("dimensions", EMBEDDING_DIMENSIONS))
-
-
-def _get_embedding_function():
-    """Return embedding function for ChromaDB.
-    
-    Supports:
-    - 'onnx': Local ONNX all-MiniLM-L6-v2 (Zero cost, runs on CPU)
-    - OpenAI: text-embedding-3-small (if OPENAI_API_KEY is explicitly configured)
-    - Default: DeterministicLocalEmbeddingFunction (1536-dim, zero overhead, fast)
+    Requires GOOGLE_API_KEY to be set in the environment.
+    Raises EnvironmentError if the key is missing.
     """
-    provider = os.getenv("EMBEDDING_PROVIDER", "").lower()
-    if provider == "onnx":
-        try:
-            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
-            return DefaultEmbeddingFunction()
-        except Exception as e:
-            logger.warning(f"DefaultEmbeddingFunction unavailable ({e}), using default.")
-
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    if openai_key and not openai_key.startswith("sk-your") and len(openai_key) > 20:
-        try:
-            from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
-            return OpenAIEmbeddingFunction(
-                api_key=openai_key,
-                model_name=EMBEDDING_MODEL,
-            )
-        except Exception:
-            pass
-
-    return DeterministicLocalEmbeddingFunction()
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise EnvironmentError(
+            "GOOGLE_API_KEY is not set. "
+            "Set it in your .env file to enable the RAG knowledge base."
+        )
+    return GeminiEmbeddingFunction(
+        api_key=api_key,
+        model_name="models/gemini-embedding-001",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,42 +93,15 @@ class TravelRAGTool:
             separators=["\n## ", "\n### ", "\n\n", "\n", ". ", " "],
         )
 
-        try:
-            self.client = chromadb.PersistentClient(
-                path=self.persist_dir,
-                settings=ChromaSettings(anonymized_telemetry=False),
-            )
-            self.collection: Collection = self.client.get_or_create_collection(
-                name=self.COLLECTION_NAME,
-                embedding_function=self.embedding_fn,
-                metadata={"hnsw:space": "cosine"},
-            )
-        except Exception as e:
-            logger.error(f"ChromaDB initialization encountered corruption or schema error: {e}. Auto-rebuilding...")
-            import shutil
-            try:
-                # Attempt to recreate in clean recovered directory
-                clean_dir = str(Path(self.persist_dir).parent / f"{Path(self.persist_dir).name}_recovered")
-                Path(clean_dir).mkdir(parents=True, exist_ok=True)
-                self.persist_dir = clean_dir
-                self.client = chromadb.PersistentClient(
-                    path=self.persist_dir,
-                    settings=ChromaSettings(anonymized_telemetry=False),
-                )
-                self.collection = self.client.get_or_create_collection(
-                    name=self.COLLECTION_NAME,
-                    embedding_function=self.embedding_fn,
-                    metadata={"hnsw:space": "cosine"},
-                )
-                logger.info("ChromaDB recovery directory created successfully.")
-            except Exception as re_err:
-                logger.error(f"Persistent client recovery failed: {re_err}. Falling back to in-memory EphemeralClient...")
-                self.client = chromadb.EphemeralClient(settings=ChromaSettings(anonymized_telemetry=False))
-                self.collection = self.client.get_or_create_collection(
-                    name=self.COLLECTION_NAME,
-                    embedding_function=self.embedding_fn,
-                    metadata={"hnsw:space": "cosine"},
-                )
+        self.client = chromadb.PersistentClient(
+            path=self.persist_dir,
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+        self.collection: Collection = self.client.get_or_create_collection(
+            name=self.COLLECTION_NAME,
+            embedding_function=self.embedding_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
 
     def load_file_content(self, file_path: Path) -> str:
         """Extract plain text from supported document types (.md, .txt, .pdf, .csv)."""
@@ -231,7 +166,6 @@ class TravelRAGTool:
         ids: List[str] = []
 
         for idx, chunk in enumerate(chunks):
-            # MD5 hash of source:idx:content[:100] for idempotent deduplication
             chunk_id = hashlib.md5(f"{source}:{idx}:{chunk[:100]}".encode("utf-8")).hexdigest()
             meta = dict(base_meta)
             meta["chunk_index"] = idx
@@ -241,7 +175,6 @@ class TravelRAGTool:
             metadatas.append(meta)
             ids.append(chunk_id)
 
-        # Upsert into ChromaDB
         self.collection.upsert(
             ids=ids,
             documents=documents,
@@ -254,7 +187,7 @@ class TravelRAGTool:
         data_dir: Optional[str] = None,
         force_recreate: bool = False,
     ) -> Dict[str, Any]:
-        """Ingest all documents from travel_docs directory into ChromaDB."""
+        """Ingest all documents from the travel_docs directory into ChromaDB."""
         docs_path = Path(data_dir or TRAVEL_DOCS_DIR)
         if not docs_path.exists():
             docs_path.mkdir(parents=True, exist_ok=True)
@@ -279,7 +212,6 @@ class TravelRAGTool:
             if file_path.is_file() and file_path.suffix.lower() in supported_exts:
                 content = self.load_file_content(file_path)
                 if content.strip():
-                    # Infer destination or topic from filename
                     fname = file_path.stem.lower()
                     dest_guess = fname.replace("_guide", "").replace("_travel", "").replace("_", " ").title()
                     meta = {
@@ -326,7 +258,7 @@ class TravelRAGTool:
                     docs.append(Document(page_content=text, metadata=meta or {}))
             return docs
         except Exception as e:
-            logger.error(f"Error during RAG search for '{query}': {e}")
+            logger.error(f"RAG search error for '{query}': {e}")
             return []
 
     def get_stats(self) -> Dict[str, Any]:
@@ -335,7 +267,6 @@ class TravelRAGTool:
         sources: set = set()
         if count > 0:
             try:
-                # Sample up to 500 metadatas to find unique sources
                 data = self.collection.get(limit=min(count, 500), include=["metadatas"])
                 for m in data.get("metadatas", []):
                     if m and "source" in m:

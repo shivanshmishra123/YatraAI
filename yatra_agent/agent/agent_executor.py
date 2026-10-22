@@ -62,7 +62,7 @@ def execute_travel_planning_agent(state: TravelPlanState) -> TravelPlanState:
     budget = state.get("budget", 0.0)
     budget_per_night = (budget / num_days) * 0.45 if budget > 0 else 2500.0
 
-    # 1. Direct Domestic Engine Execution (guarantees 100% structured data availability)
+    # 1. Direct Live API Tool Execution (Amadeus, Google Maps/Places, WeatherAPI, Buses)
     mcp = MCPToolManager()
 
     async def _fetch_all_travel_data():
@@ -245,7 +245,7 @@ def execute_travel_planning_agent(state: TravelPlanState) -> TravelPlanState:
     except Exception as e:
         logger.warning(f"RAG search error during agent execution: {e}")
 
-    # 2. If OpenAI API key is active, invoke LangChain ReAct Agent for autonomous synthesis
+    # 2. Invoke LangChain ReAct Agent for autonomous synthesis if primary LLM is available
     agent = build_planning_agent()
     if agent:
         try:
